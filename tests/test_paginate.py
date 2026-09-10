@@ -188,3 +188,38 @@ def test_plan_actual_size_centers_narrow_image():
     assert p.scale == pytest.approx(3.125)
     assert p.x_offset == 341
     assert p.slices == [(0, 10)]
+
+
+from paginate import smart_cut_count
+
+
+def _striped_with_blank_row(blank_y):
+    im = Image.new("RGB", (71, 250), "black")
+    for y in range(250):
+        for x in range(0, 71, 2):
+            im.putpixel((x, y), (255, 255, 255))
+    for x in range(71):
+        im.putpixel((x, blank_y), (255, 255, 255))
+    return im
+
+
+def test_options_smart_split_defaults_on():
+    assert Options().smart_split is True
+
+
+def test_plan_without_smart_split_uses_equal_split():
+    im = _striped_with_blank_row(90)
+    p = plan(im, Options(margin_mm=0, smart_split=False))
+    assert p.slices == [(0, 100), (100, 200), (200, 250)]
+
+
+def test_smart_cut_count_counts_cuts_on_blank_rows():
+    im = _striped_with_blank_row(90)
+    p = plan(im, Options(margin_mm=0))
+    assert p.slices == [(0, 90), (90, 190), (190, 250)]
+    assert smart_cut_count(im, p) == 1  # 90은 빈 줄, 190은 등분
+
+
+def test_smart_cut_count_is_zero_for_single_page():
+    im = Image.new("RGB", (71, 50), "black")
+    assert smart_cut_count(im, plan(im, Options(margin_mm=0))) == 0

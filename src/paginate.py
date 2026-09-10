@@ -98,6 +98,7 @@ def split_rows(img_h: int, page_h: int, is_blank: Callable[[int], bool]) -> list
 class Options:
     keep_actual_size: bool = False
     margin_mm: float = 10.0
+    smart_split: bool = True  # 빈 줄에 맞춰 자르기. 꺼지면 등분
 
 
 @dataclass(frozen=True)
@@ -116,8 +117,11 @@ def plan(image: Image.Image, options: Options) -> Plan:
     layout = layout_for(options.margin_mm)
     scale, x_offset = compute_scale(img_w, layout.usable_w, options.keep_actual_size)
     page_h = page_height(scale, layout.usable_h)
-    gray = image.convert("L")
-    slices = split_rows(img_h, page_h, lambda y: is_blank_row(gray, y))
+    if options.smart_split:
+        gray = image.convert("L")
+        slices = split_rows(img_h, page_h, lambda y: is_blank_row(gray, y))
+    else:
+        slices = split_rows(img_h, page_h, lambda y: False)
     return Plan(
         scale=scale,
         x_offset=x_offset,
@@ -126,3 +130,9 @@ def plan(image: Image.Image, options: Options) -> Plan:
         usable_h=layout.usable_h,
         slices=slices,
     )
+
+
+def smart_cut_count(image: Image.Image, plan: Plan) -> int:
+    """분할 위치 중 빈 줄에 놓인 것의 수. 마지막 구간 끝(이미지 끝)은 세지 않는다."""
+    gray = image.convert("L")
+    return sum(1 for _, y1 in plan.slices[:-1] if is_blank_row(gray, y1))
