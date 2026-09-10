@@ -16,7 +16,9 @@ from PIL import Image, UnidentifiedImageError  # noqa: E402
 from background import apply_background, detect_background, is_white  # noqa: E402
 from image_loader import SUPPORTED_EXTENSIONS, load_image  # noqa: E402
 from paginate import Options, Plan, plan, smart_cut_count  # noqa: E402
-from pdf_writer import write  # noqa: E402
+from pdf_writer import render_pages, write  # noqa: E402
+from preview import PreviewWindow  # noqa: E402
+from printer import list_printers, print_pages  # noqa: E402
 
 APP_TITLE = "PrintImg"
 MARGIN_MIN = 0
@@ -88,10 +90,17 @@ class App(tk.Tk):
             frame, from_=MARGIN_MIN, to=MARGIN_MAX, textvariable=self.margin, width=5
         ).grid(row=4, column=1, sticky="w", pady=(8, 0))
 
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+        buttons.columnconfigure((0, 1), weight=1)
         self.make_button = ttk.Button(
-            frame, text="PDF 만들기", command=self.make_pdf, state="disabled"
+            buttons, text="PDF 만들기", command=self.make_pdf, state="disabled"
         )
-        self.make_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+        self.make_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        self.print_button = ttk.Button(
+            buttons, text="바로 인쇄…", command=self.print_direct, state="disabled"
+        )
+        self.print_button.grid(row=0, column=1, sticky="ew", padx=(4, 0))
 
         self.status = ttk.Label(frame, text="", wraplength=360)
         self.status.grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
@@ -121,6 +130,7 @@ class App(tk.Tk):
         self._show_bg_color()
         self.file_label.config(text=f"{self.image_path.name} · {image.width} × {image.height}")
         self.make_button.config(state="normal")
+        self.print_button.config(state="normal")
         self.status.config(text="")
 
     def pick_bg_color(self) -> None:
@@ -167,6 +177,43 @@ class App(tk.Tk):
 
         self.status.config(text=f"{summary} → {out_path.name}")
         self._open_pdf(out_path)
+
+    def print_direct(self) -> None:
+        if self.image_path is None or self.image is None:
+            return
+        options = self._read_options()
+        if options is None:
+            return
+
+        self._set_busy(True)
+        try:
+            image, p, notes = self._prepare(options)
+            pages = render_pages(image, p)
+            printers, default = list_printers()
+            if not printers:
+                raise UserError("설치된 프린터가 없습니다.")
+        except UserError as e:
+            self._set_busy(False)
+            messagebox.showerror(APP_TITLE, str(e))
+            return
+        except Exception as e:
+            self._set_busy(False)
+            messagebox.showerror(APP_TITLE, f"미리보기를 만들 수 없습니다.\n{type(e).__name__}: {e}")
+            return
+        self._set_busy(False)
+
+        summary = f"{len(pages)}페이지" + (f" ({', '.join(notes)})" if notes else "")
+        job_name = f"{APP_TITLE} - {self.image_path.name}"
+
+        def send(printer_name: str) -> None:
+            try:
+                print_pages(pages, printer_name, job_name)
+            except Exception as e:
+                messagebox.showerror(APP_TITLE, f"인쇄에 실패했습니다.\n{type(e).__name__}: {e}")
+                return
+            self.status.config(text=f"{summary} 인쇄 전송 → {printer_name}")
+
+        PreviewWindow(self, pages, printers, default, send)
 
     # ----- 파이프라인 -----
 
@@ -228,7 +275,9 @@ class App(tk.Tk):
         )
 
     def _set_busy(self, busy: bool) -> None:
-        self.make_button.config(state="disabled" if busy else "normal")
+        state = "disabled" if busy else "normal"
+        self.make_button.config(state=state)
+        self.print_button.config(state=state)
         self.config(cursor="watch" if busy else "")
         # 성공 시에는 호출자가 이 뒤에 결과 문구를 덮어쓴다. 오류 시 "처리 중…"이 남지 않게 비운다.
         self.status.config(text="처리 중…" if busy else "")

@@ -36,8 +36,13 @@ def list_printers() -> tuple[list[str], str | None]:
     return names, default
 
 
-def print_pages(pages: list[Image.Image], printer_name: str, job_name: str) -> None:
-    """페이지 이미지들을 한 인쇄 작업으로 보낸다. 실패하면 예외를 그대로 올린다."""
+def print_pages(
+    pages: list[Image.Image], printer_name: str, job_name: str, output_file: str | None = None
+) -> None:
+    """페이지 이미지들을 한 인쇄 작업으로 보낸다. 실패하면 예외를 그대로 올린다.
+
+    output_file을 주면 파일 출력 드라이버(예: Microsoft Print to PDF)가 대화상자 없이 그 경로에 쓴다.
+    """
     import win32con
     import win32ui
     from PIL import ImageWin
@@ -50,7 +55,7 @@ def print_pages(pages: list[Image.Image], printer_name: str, job_name: str) -> N
         off_x = dc.GetDeviceCaps(win32con.PHYSICALOFFSETX)
         off_y = dc.GetDeviceCaps(win32con.PHYSICALOFFSETY)
 
-        dc.StartDoc(job_name)
+        dc.StartDoc(job_name, output_file)
         try:
             for page in pages:
                 dc.StartPage()

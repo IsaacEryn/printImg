@@ -32,6 +32,8 @@ printImg/
 │   ├── image_loader.py # 파일 열기, EXIF 회전, 투명도 합성, RGB 통일
 │   ├── paginate.py    # 순수 로직: 배율 계산 + 분할 위치 결정
 │   ├── background.py  # 배경색 감지, 제거·흐리게 (Pillow만 사용)
+│   ├── preview.py     # 인쇄 미리보기 창 (썸네일, 프린터 선택)
+│   ├── printer.py     # pywin32로 페이지를 프린터에 직접 출력
 │   └── pdf_writer.py  # 조각을 A4 캔버스에 얹어 PDF 저장
 ├── tests/
 │   ├── test_paginate.py
@@ -172,3 +174,18 @@ pytest. 테스트 이미지는 파일 없이 Pillow로 코드 안에서 생성�
 `paginate.Options.smart_split`(기본 True): 꺼지면 빈 줄 탐색 없이 등분. `smart_cut_count(image, plan)`은 분할 위치 중 빈 줄에 놓인 수.
 
 GUI: `☐ 빈 줄에 맞춰 자르기`, `☐ 배경색 [제거|흐리게] [#eeedfc]`(체크 해제 시 비활성). 상태줄 예: `3페이지 생성 (배경 #eeedfc 제거, 빈 줄 컷 2/2) → foo.pdf`.
+
+## 11. 바로 인쇄 (2026-09-10 추가)
+
+`[바로 인쇄…]` 버튼은 PDF와 같은 준비 단계(배경 처리 → 분할 → A4 캔버스 렌더링)를 거친 뒤 파일을 만들지 않고 미리보기 창을 연다.
+
+`src/preview.py` `PreviewWindow`: 페이지 썸네일(폭 420 px)을 세로로 나열한 스크롤 캔버스, 각 장 아래 `n / N`, 하단에 프린터 콤보박스(기본 프린터 선택됨)·`[인쇄]`·`[닫기]`. 모달(grab)이며 `[인쇄]`를 누르면 콜백을 부르고 닫힌다.
+
+`src/printer.py`
+- `list_printers()`: `win32print.EnumPrinters`(로컬 + 연결) 이름 목록과 기본 프린터.
+- `print_pages(pages, printer_name, job_name, output_file=None)`: 프린터 DC를 열고 페이지마다 `StartPage` → `PIL.ImageWin.Dib.draw` → `EndPage`. `output_file`을 주면 파일 출력 드라이버(Microsoft Print to PDF 등)가 대화상자 없이 그 경로에 쓴다(검증용).
+- `page_box(phys_w, phys_h, off_x, off_y, page_w, page_h)`: 페이지를 물리 용지에 비율 유지로 꽉 채워 가운데 놓은 상자. 좌표는 GDI 원점(인쇄 가능 영역 왼쪽 위) 기준이라 오프셋을 뺀다. 우리 페이지에 여백이 이미 들어 있으므로 인쇄 불가 영역은 무시한다. A4가 아닌 용지는 비율 유지로 맞추고 남는 쪽은 가운데 정렬.
+
+오류: 프린터 없음 → "설치된 프린터가 없습니다."; 인쇄 중 예외 → "인쇄에 실패했습니다." + 예외. 상태줄 예: `3페이지 (빈 줄 컷 2/2) 인쇄 전송 → iR-ADV C3525`.
+
+의존성: `pywin32`(Windows 전용). PyInstaller spec에 썸네일용 `PIL._tkinter_finder` 숨은 import.
