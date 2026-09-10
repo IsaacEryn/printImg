@@ -100,22 +100,30 @@ class App(tk.Tk):
 
         self._set_busy(True)
         try:
-            image = load_image(self.image_path)
+            try:
+                image = load_image(self.image_path)
+            except Image.DecompressionBombError:
+                messagebox.showerror(APP_TITLE, "이미지가 너무 큽니다.")
+                return
+            except (UnidentifiedImageError, OSError):
+                messagebox.showerror(
+                    APP_TITLE, f"이미지를 열 수 없습니다.\n{self.image_path.name}"
+                )
+                return
+
             options = Options(keep_actual_size=self.keep_actual.get(), margin_mm=margin_mm)
-            page_count = write(image, plan(image, options), out_path)
-        except Image.DecompressionBombError:
-            messagebox.showerror(APP_TITLE, "이미지가 너무 큽니다.")
-            return
-        except PermissionError:
-            messagebox.showerror(
-                APP_TITLE, f"{out_path.name} 파일이 열려 있습니다. 닫고 다시 시도하세요."
-            )
-            return
-        except (UnidentifiedImageError, OSError):
-            messagebox.showerror(
-                APP_TITLE, f"이미지를 열 수 없습니다.\n{self.image_path.name}"
-            )
-            return
+            try:
+                page_count = write(image, plan(image, options), out_path)
+            except PermissionError:
+                messagebox.showerror(
+                    APP_TITLE, f"{out_path.name} 파일이 열려 있습니다. 닫고 다시 시도하세요."
+                )
+                return
+            except OSError as e:
+                messagebox.showerror(
+                    APP_TITLE, f"PDF를 저장할 수 없습니다.\n{out_path.name}\n{e}"
+                )
+                return
         finally:
             self._set_busy(False)
 
