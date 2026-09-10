@@ -27,7 +27,7 @@ AUTHOR = "Isaac"
 AUTHOR_URL = "https://www.codeslog.com"
 MARGIN_MIN = 0
 MARGIN_MAX = 30
-MARGIN_DEFAULT = 10
+MARGIN_DEFAULT = 5
 MAX_PAGES = 50
 BG_MODES = {"제거": "remove", "흐리게": "fade"}
 
@@ -113,8 +113,9 @@ class App(tk.Tk):
         self.status = ttk.Label(frame, text="", wraplength=360)
         self.status.grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
+        # 색을 고정하지 않는다(#888은 라이트 모드에서 대비 3.0:1로 미달). 글자 크기로만 약하게.
         credit = ttk.Label(
-            frame, text=f"Made by {AUTHOR} · codeslog.com", foreground="#888", cursor="hand2"
+            frame, text=f"Made by {AUTHOR} · codeslog.com", font="TkSmallCaptionFont", cursor="hand2"
         )
         credit.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
         credit.bind("<Button-1>", lambda e: webbrowser.open(AUTHOR_URL))
@@ -163,8 +164,11 @@ class App(tk.Tk):
             return
 
         out_path = self.image_path.with_suffix(".pdf")
+        # 기본 버튼은 "아니오". Enter 한 번에 원본 PDF가 덮어써지지 않게.
         if out_path.exists() and not messagebox.askyesno(
-            APP_TITLE, f"{out_path.name} 파일이 이미 있습니다. 덮어쓸까요?"
+            APP_TITLE,
+            f"{out_path.name} 파일이 이미 있습니다. 덮어쓸까요?",
+            default=messagebox.NO,
         ):
             return
 
@@ -174,7 +178,13 @@ class App(tk.Tk):
             try:
                 page_count = write(image, p, out_path)
             except PermissionError:
-                raise UserError(f"{out_path.name} 파일이 열려 있습니다. 닫고 다시 시도하세요.")
+                # Windows는 뷰어가 파일을 잠갔을 때, 맥은 폴더에 쓸 권한이 없을 때(읽기 전용 위치,
+                # 시스템 설정의 파일·폴더 접근 거부) 여기로 온다. 둘 다 안내한다.
+                raise UserError(
+                    f"{out_path.name}에 저장할 수 없습니다 (권한 없음).\n"
+                    "다른 프로그램에 열려 있으면 닫고, 폴더에 쓸 수 없으면 이미지를 쓸 수 있는 폴더로 옮기세요.\n"
+                    "macOS: 시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더에서 PrintImg를 허용하세요."
+                )
             except OSError as e:
                 raise UserError(f"PDF를 저장할 수 없습니다.\n{out_path.name}\n{e}")
             summary = f"{page_count}페이지 생성" + (f" ({', '.join(notes)})" if notes else "")

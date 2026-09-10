@@ -94,10 +94,23 @@ def split_rows(img_h: int, page_h: int, is_blank: Callable[[int], bool]) -> list
     return slices
 
 
+def drop_trailing_blank(
+    slices: list[tuple[int, int]], is_blank: Callable[[int], bool]
+) -> list[tuple[int, int]]:
+    """마지막 구간이 전부 빈 줄이면 버린다. 한 페이지를 몇 px만 넘는 캡처(끝이 여백)에서 백지가 나오던 문제.
+
+    분할 토글과 무관하게 적용한다. 구간이 하나뿐이면 그대로 둔다.
+    """
+    out = list(slices)
+    while len(out) > 1 and all(is_blank(y) for y in range(*out[-1])):
+        out.pop()
+    return out
+
+
 @dataclass(frozen=True)
 class Options:
     keep_actual_size: bool = False
-    margin_mm: float = 10.0
+    margin_mm: float = 5.0
     smart_split: bool = True  # 빈 줄에 맞춰 자르기. 꺼지면 등분
 
 
@@ -117,11 +130,13 @@ def plan(image: Image.Image, options: Options) -> Plan:
     layout = layout_for(options.margin_mm)
     scale, x_offset = compute_scale(img_w, layout.usable_w, options.keep_actual_size)
     page_h = page_height(scale, layout.usable_h)
+    gray = image.convert("L")
+    blank = lambda y: is_blank_row(gray, y)
     if options.smart_split:
-        gray = image.convert("L")
-        slices = split_rows(img_h, page_h, lambda y: is_blank_row(gray, y))
+        slices = split_rows(img_h, page_h, blank)
     else:
         slices = split_rows(img_h, page_h, lambda y: False)
+    slices = drop_trailing_blank(slices, blank)
     return Plan(
         scale=scale,
         x_offset=x_offset,

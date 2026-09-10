@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 from PIL import Image
 
@@ -27,15 +28,28 @@ def render_pages(image: Image.Image, plan: Plan) -> list[Image.Image]:
 
 
 def save_pages(pages: list[Image.Image], out_path: str | os.PathLike) -> int:
-    """렌더링된 페이지들을 다중 페이지 PDF로 저장하고 페이지 수를 돌려준다."""
-    pages[0].save(
-        out_path,
-        "PDF",
-        resolution=float(OUTPUT_DPI),
-        save_all=True,
-        append_images=pages[1:],
-        quality=JPEG_QUALITY,
-    )
+    """렌더링된 페이지들을 다중 페이지 PDF로 저장하고 페이지 수를 돌려준다.
+
+    같은 폴더의 임시 파일에 쓴 뒤 os.replace로 바꿔치기해, 저장 도중 실패해도 기존 파일이 반쯤 잘린
+    상태로 남지 않는다. 권한 오류는 mkstemp나 replace에서 PermissionError로 올라온다.
+    """
+    out_path = os.fspath(out_path)
+    out_dir = os.path.dirname(os.path.abspath(out_path))
+    fd, tmp = tempfile.mkstemp(prefix=".printimg-", suffix=".pdf", dir=out_dir)
+    os.close(fd)
+    try:
+        pages[0].save(
+            tmp,
+            "PDF",
+            resolution=float(OUTPUT_DPI),
+            save_all=True,
+            append_images=pages[1:],
+            quality=JPEG_QUALITY,
+        )
+        os.replace(tmp, out_path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
     return len(pages)
 
 

@@ -4,23 +4,22 @@
 
 ## 1. 목적
 
-이미지 파일 하나를 골라 A4 세로 용지 기준의 다중 페이지 PDF로 만드는 Windows 데스크톱 프로그램.
+이미지 파일 하나를 골라 A4 세로 용지 기준의 다중 페이지 PDF로 만들거나 바로 인쇄하는 데스크톱 프로그램(Windows·macOS, §11·§12)과, 같은 분할·배경 알고리즘을 브라우저에서 돌리는 단일 파일 HTML 버전(`printImg.html`).
 세로로 긴 화면 캡처(예: Google Forms 응답 화면 전체 캡처)를 종이로 뽑는 용도가 주 목적이다.
 
 ## 2. 요구사항
 
-- Python + Tkinter GUI, PyInstaller로 단일 exe 배포 (옆 프로젝트 `stayAwake`와 같은 방식).
-- 이미지 선택 → 옵션 지정 → PDF 생성 → 기본 PDF 뷰어로 자동 열기. 프린터로 직접 보내지 않는다.
+- Python + Tkinter GUI, PyInstaller로 Windows exe·macOS .app 배포(§12).
+- 이미지 선택 → 옵션 지정 → PDF 생성 → 기본 PDF 뷰어로 자동 열기. 또는 "바로 인쇄…"로 미리보기 뒤 프린터에 직접 보낸다(§11).
 - 가로 크기 규칙
   - 기본(폭 맞춤): 이미지 폭을 인쇄 가능 영역 폭에 100% 맞춘다. 작으면 확대, 크면 축소.
   - "원본 크기 유지" 옵션: 원본 1 px = 1/96 inch로 보고 실제 크기로 출력한다. 이 크기로 폭이 넘치면 폭 맞춤으로 자동 전환한다.
 - 세로 크기 규칙: 한 페이지를 넘는 높이는 여러 페이지로 이어서 출력한다. 자르는 위치는 페이지 경계 근처의 빈 줄(단색 가로줄)을 우선하고, 없으면 등분한다.
-- 여백: 사용자 옵션, 네 변 동일, 0~30 mm, 기본 10 mm.
-- 미리보기는 없다. 확인은 생성된 PDF를 뷰어에서 본다.
+- 여백: 사용자 옵션, 네 변 동일, 0~30 mm, 기본 5 mm (HTML 버전과 동일. 2026-09-10 10→5로 통일).
+- PDF 경로에는 미리보기가 없고 생성된 PDF를 뷰어에서 본다. 인쇄 미리보기는 "바로 인쇄…" 창(§11)에서만 제공한다.
 
 ### 범위 밖 (v2 후보)
-- 프린터로 직접 인쇄
-- 창 안 미리보기 및 분할 경계 수동 조정
+- 분할 경계 수동 조정
 - 가로 방향 용지, A4 외 용지
 
 ## 3. 구조
@@ -197,7 +196,7 @@ GUI: `☐ 빈 줄에 맞춰 자르기`, `☐ 배경색 [제거|흐리게] [#eeed
 - `desktop.open_file(path)`: Windows `os.startfile`, 맥 `open`, 리눅스 `xdg-open`. `open_command(path, platform)`은 순수 함수로 테스트.
 - `printer`: `sys.platform`으로 백엔드를 고른다. Windows는 pywin32 GDI(기존). 맥·리눅스는 CUPS: `lpstat -p`/`lpstat -d` 출력을 `parse_lpstat_printers`/`parse_lpstat_default`로 읽고, 페이지를 임시 PDF(`pdf_writer.save_pages`)로 저장한 뒤 `lpr -P 프린터 -T 작업명 -o media=A4 -o fit-to-page`로 보낸다. `lpstat`이 없으면 프린터 없음으로 처리.
 
-GUI의 배경색 견본은 `tk.Button(bg=…)` 대신 `Canvas` 사각형 + `ttk.Button`(hex 표시)으로 바꿨다. 맥 Aqua는 버튼 배경색을 무시하고 `SystemButtonFace` 색 이름도 없다.
+GUI의 배경색 견본은 `tk.Button(bg=…)` 대신 `Canvas` 사각형 + `ttk.Button`(hex 표시)으로 바꿨다. 맥 Aqua의 `tk.Button`은 `bg`를 그리지 않아 견본이 보이지 않았다.
 
 의존성: `pywin32; sys_platform == "win32"`. 빌드: `PrintImg-mac.spec`(onedir COLLECT → BUNDLE → `dist/PrintImg.app`) + `scripts/build.sh`(Tk가 있는 Python 3.12+를 찾아 `.venv`에서 빌드). 맥 빌드와 실제 인쇄 확인은 맥에서만 가능하다 (README 체크리스트).
 

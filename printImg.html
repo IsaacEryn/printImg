@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="author" content="Isaac (https://www.codeslog.com)">
 <meta name="description" content="PrintImg — 세로로 긴 이미지를 A4 여러 장으로 나눠 인쇄. Split a tall image into A4 pages and print, all in the browser. By Isaac, codeslog.com">
-<title>PrintImg v3 (HTML)</title>
+<title>PrintImg (HTML)</title>
 <style>
 	/* 용지 여백은 0으로 고정한다. 브라우저 머리글·바닥글은 용지 여백에 그려지므로
 	   여백이 0이면 Chrome/Edge가 아예 출력하지 않는다. 사용자 여백은 .page의 padding으로 준다. */
@@ -54,6 +54,7 @@
 		background: var(--panel);
 		border-right: 1px solid var(--line);
 		padding: 20px;
+		min-width: 0; /* 그리드 아이템 기본 min-width:auto 때문에 320px(400% 확대)에서 가로 스크롤이 생겼다 (WCAG 1.4.10) */
 		display: flex; flex-direction: column; gap: 22px;
 	}
 	.panel section, .panel fieldset {
@@ -149,7 +150,7 @@ document.addEventListener('DOMContentLoaded', function () {
 	const RENDER_DELAY_MS = 200;  // 여백 입력 중 재계산 지연
 
 	const fileInput = document.getElementById('file');
-	const fitBox    = document.getElementById('fit');
+	const keepBox   = document.getElementById('keep');
 	const smartBox  = document.getElementById('smart');
 	const bgOn      = document.getElementById('bgOn');
 	const bgMode    = document.getElementById('bgMode');
@@ -292,26 +293,30 @@ document.addEventListener('DOMContentLoaded', function () {
 	function blankRows(y0, y1) {
 		const h = y1 - y0;
 		const w = Math.min(img.naturalWidth, MAX_RENDER_W);
-		const { ctx } = drawSlice(y0, y1, w, true);
+		const { canvas, ctx } = drawSlice(y0, y1, w, true);
+		const ch = canvas.height; // 폭을 MAX_RENDER_W로 줄이면 높이도 같이 줄어든다. 캔버스 밖을 읽으면 안 된다.
 		let d;
 		try {
-			d = ctx.getImageData(0, 0, w, h).data;
+			d = ctx.getImageData(0, 0, w, ch).data;
 		} catch (e) {
 			// 캔버스가 오염(tainted)되어 픽셀을 읽을 수 없음 → 상태줄에 알리고 등분
 			pixelReadFailed = true;
 			return new Uint8Array(h);
 		}
-		const out = new Uint8Array(h);
-		for (let y = 0; y < h; y++) {
-			let min = 255, max = 0, i = y * w * 4;
+		const rowBlank = new Uint8Array(ch);
+		for (let cy = 0; cy < ch; cy++) {
+			let min = 255, max = 0, i = cy * w * 4;
 			for (let x = 0; x < w; x++, i += 4) {
 				const g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
 				if (g < min) min = g;
 				if (g > max) max = g;
 				if (max - min > BLANK_THRESHOLD) break;
 			}
-			out[y] = (max - min) <= BLANK_THRESHOLD ? 1 : 0;
+			rowBlank[cy] = (max - min) <= BLANK_THRESHOLD ? 1 : 0;
 		}
+		if (ch === h) return rowBlank;
+		const out = new Uint8Array(h);
+		for (let y = 0; y < h; y++) out[y] = rowBlank[Math.min(ch - 1, Math.floor(y * ch / h))];
 		return out;
 	}
 
@@ -334,6 +339,12 @@ document.addEventListener('DOMContentLoaded', function () {
 			y0 = cut;
 		}
 		segs.push({ y0, y1: naturalH, smart: false });
+		// 마지막 조각이 전부 빈 줄(끝 여백)이면 버린다. 한 페이지를 몇 px만 넘는 캡처에서 백지가 나오던 문제. 분할 토글과 무관.
+		while (segs.length > 1) {
+			const last = segs[segs.length - 1];
+			if (!blankRows(last.y0, last.y1).every(v => v)) break;
+			segs.pop();
+		}
 		return segs;
 	}
 
@@ -384,7 +395,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		const m = applyMargin();
 		if (!img) return;
 
-		const { dispW, scale, pageH, sheetH } = layout(img.naturalWidth, fitBox.checked, m);
+		const { dispW, scale, pageH, sheetH } = layout(img.naturalWidth, !keepBox.checked, m);
 		const renderW = Math.min(img.naturalWidth, MAX_RENDER_W);
 		pixelReadFailed = false;
 		const segs = segments(img.naturalHeight, pageH, smartBox.checked);
@@ -436,6 +447,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			bgManual = false;
 			if (bgColor) bgPick.value = toHex(bgColor);
 			fileInfo.textContent = `${file.name} · ${im.naturalWidth} × ${im.naturalHeight} px`;
+			document.title = `${file.name.replace(/\.[^.]+$/, '')} — PrintImg`; // "PDF로 저장" 기본 파일명
 			render();
 		};
 		im.onerror = () => {
@@ -451,7 +463,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		im.src = url;
 	});
 
-	fitBox.addEventListener('change', render);
+	keepBox.addEventListener('change', render);
 	smartBox.addEventListener('change', render);
 	bgOn.addEventListener('change', () => { bgMode.disabled = bgPick.disabled = !bgOn.checked; render(); });
 	bgPick.addEventListener('change', () => { bgColor = hexToRgb(bgPick.value); bgManual = true; render(); });
@@ -467,7 +479,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 <div class="app">
 	<aside class="panel" aria-label="설정">
-		<h1>PrintImg v3 <span class="hint" style="display:inline">이미지를 A4로 나눠 인쇄</span></h1>
+		<h1>PrintImg <span class="hint" style="display:inline">이미지를 A4로 나눠 인쇄</span></h1>
 
 		<section aria-labelledby="h-file">
 			<h2 id="h-file">1. 이미지 선택</h2>
@@ -479,8 +491,8 @@ document.addEventListener('DOMContentLoaded', function () {
 		<fieldset>
 			<legend>2. 옵션</legend>
 			<div class="field">
-				<input type="checkbox" id="fit">
-				<label for="fit">폭 맞춤 (작은 이미지도 A4 폭까지 확대)</label>
+				<input type="checkbox" id="keep">
+				<label for="keep">원본 크기 유지 (96 DPI 기준 실제 크기. A4보다 넓으면 폭 맞춤)</label>
 			</div>
 			<div class="field">
 				<input type="checkbox" id="smart" checked>
@@ -506,7 +518,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		<section aria-labelledby="h-print">
 			<h2 id="h-print">3. 인쇄</h2>
 			<button type="button" id="print" disabled>인쇄</button>
-			<p class="hint"><kbd>Ctrl</kbd>+<kbd>P</kbd>로도 인쇄할 수 있습니다.</p>
+			<p class="hint"><kbd>Ctrl</kbd>+<kbd>P</kbd>(맥은 <kbd>⌘</kbd>+<kbd>P</kbd>)로도 인쇄할 수 있습니다.</p>
 			<p id="status" role="status" aria-live="polite"></p>
 			<p id="error" role="alert"></p>
 			<p class="hint">인쇄 대화상자에서 여백은 <strong>기본값</strong>, 배율은 <strong>100%</strong>로 두세요. 바꾸면 페이지가 어긋납니다. 머리글·바닥글은 켜져 있어도 출력되지 않습니다.</p>

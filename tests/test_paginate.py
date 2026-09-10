@@ -161,7 +161,7 @@ from paginate import Options, Plan, plan
 
 
 def test_options_defaults():
-    assert Options() == Options(keep_actual_size=False, margin_mm=10.0)
+    assert Options() == Options(keep_actual_size=False, margin_mm=5.0)
 
 
 def test_plan_end_to_end_cuts_at_blank_row():
@@ -223,3 +223,25 @@ def test_smart_cut_count_counts_cuts_on_blank_rows():
 def test_smart_cut_count_is_zero_for_single_page():
     im = Image.new("RGB", (71, 50), "black")
     assert smart_cut_count(im, plan(im, Options(margin_mm=0))) == 0
+
+
+def test_drop_trailing_blank_removes_all_blank_last_segment():
+    from paginate import drop_trailing_blank
+
+    blank = {100, 101, 102, 103, 104, 105}
+    slices = [(0, 100), (100, 106)]
+    assert drop_trailing_blank(slices, lambda y: y in blank) == [(0, 100)]
+    # 마지막 구간에 내용이 한 줄이라도 있으면 그대로
+    assert drop_trailing_blank(slices, lambda y: y in blank - {103}) == slices
+    # 구간이 하나뿐이면 전부 빈 줄이어도 남긴다
+    assert drop_trailing_blank([(0, 50)], lambda y: True) == [(0, 50)]
+
+
+def test_plan_does_not_emit_blank_last_page_even_when_split_is_off():
+    # 폭 71, 여백 0 → page_h = 100. 높이 106, 내용은 y<100 → 예전엔 2페이지(둘째는 백지)
+    im = Image.new("RGB", (71, 106), "white")
+    for y in range(0, 100, 10):
+        for x in range(71):
+            im.putpixel((x, y), (0, 0, 0))
+    assert plan(im, Options(margin_mm=0, smart_split=True)).slices == [(0, 100)]
+    assert plan(im, Options(margin_mm=0, smart_split=False)).slices == [(0, 100)]
