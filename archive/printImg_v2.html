@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PrintImg v2 (HTML)</title>
+<style id="page-style">
+	/* 여백에 따라 JS가 다시 씀 */
+	@page { size: A4 portrait; margin: 10mm; }
+</style>
+<style>
+	/* ---------- 화면 공통 ---------- */
+	:root {
+		--sheet-w: 190mm;   /* A4 210mm - 여백×2, JS가 갱신 */
+		--sheet-h: 277mm;   /* A4 297mm - 여백×2, JS가 갱신 */
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		font: 14px/1.5 system-ui, "Malgun Gothic", sans-serif;
+		background: #e9e9ec;
+		color: #222;
+	}
+	.toolbar {
+		position: sticky; top: 0; z-index: 10;
+		display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+		padding: 10px 16px;
+		background: #fff;
+		border-bottom: 1px solid #ccc;
+	}
+	.toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+	.toolbar button { padding: 6px 14px; font: inherit; cursor: pointer; }
+	.toolbar button:disabled { cursor: not-allowed; opacity: .5; }
+	.toolbar input[type=number] { font: inherit; padding: 3px 4px; }
+	#status { color: #555; }
+
+	#pages:empty::after {
+		content: "이미지를 선택하세요";
+		display: block; padding: 40px; text-align: center; color: #999;
+	}
+
+	/* 페이지 한 장 = 조각 캔버스 하나 */
+	.page {
+		position: relative;
+		width: var(--sheet-w);
+		min-height: var(--sheet-h);
+		margin: 20px auto;
+		background: #fff;
+		box-shadow: 0 0 8px rgba(0,0,0,.25);
+	}
+	.page canvas { display: block; }
+	.page .num {
+		position: absolute; right: 6px; bottom: 4px;
+		font-size: 11px; color: #999;
+	}
+	.page .cut {
+		position: absolute; left: 0; right: 0;
+		border-top: 1px dashed #d33;
+	}
+	.page .cut span {
+		position: absolute; right: 4px; top: -18px;
+		font-size: 11px; color: #d33; background: rgba(255,255,255,.8); padding: 0 4px;
+	}
+
+	/* ---------- 인쇄 시 ---------- */
+	@media print {
+		body { background: #fff; }
+		.toolbar, .num, .cut { display: none !important; }
+		.page {
+			width: auto; min-height: 0; margin: 0;
+			box-shadow: none;
+			break-after: page;
+		}
+		.page:last-child { break-after: auto; }
+	}
+</style>
+<script>
+// head에 있으므로 DOM이 준비된 뒤 실행
+document.addEventListener('DOMContentLoaded', function () {
+	const MM_PER_INCH = 25.4, CSS_DPI = 96;
+	const A4_W_MM = 210, A4_H_MM = 297;
+	const mmToPx = mm => mm / MM_PER_INCH * CSS_DPI;
+
+	// 빈 줄 탐지 상수 (파이썬 버전과 동일)
+	const BLANK_THRESHOLD = 8;    // 한 줄의 밝기 (최대 − 최소) 가 이 이하면 빈 줄
+	const SEARCH_RATIO    = 0.3;  // 이상 경계에서 위로 page_h × 이 비율만큼 탐색
+	const MAX_RENDER_W    = 4096; // 조각 캔버스 최대 폭 (거대 이미지 보호)
+
+	const fileInput = document.getElementById('file');
+	const fitBox    = document.getElementById('fit');
+	const smartBox  = document.getElementById('smart');
+	const marginIn  = document.getElementById('margin');
+	const printBtn  = document.getElementById('print');
+	const status    = document.getElementById('status');
+	const pagesEl   = document.getElementById('pages');
+	const pageStyle = document.getElementById('page-style');
+
+	let img = null;        // 로드된 원본 <img>
+	let objectUrl = null;  // 해제용
+	let fileName = '';
+
+	// 여백(mm)을 0~30으로 정리해서 돌려줌
+	function marginMm() {
+		let m = parseFloat(marginIn.value);
+		if (!Number.isFinite(m)) m = 10;
+		return Math.min(30, Math.max(0, m));
+	}
+
+	// 여백을 @page 규칙과 화면 미리보기 크기에 반영
+	function applyMargin() {
+		const m = marginMm();
+		pageStyle.textContent = `@page { size: A4 portrait; margin: ${m}mm; }`;
+		document.documentElement.style.setProperty('--sheet-w', `${A4_W_MM - 2 * m}mm`);
+		document.documentElement.style.setProperty('--sheet-h', `${A4_H_MM - 2 * m}mm`);
+		return m;
+	}
+
+	// 배율과 한 페이지에 들어가는 원본 높이 계산
+	function layout(naturalW, fit, m) {
+		const sheetW = mmToPx(A4_W_MM - 2 * m);
+		const sheetH = mmToPx(A4_H_MM - 2 * m);
+		const dispW  = fit ? sheetW : Math.min(naturalW, sheetW);
+		const scale  = dispW / naturalW;                        // 원본 1px → CSS px
+		const pageH  = Math.max(1, Math.floor(sheetH / scale)); // 한 페이지 높이 (원본 px)
+		return { dispW, scale, pageH };
+	}
+
+	// 원본의 [y0, y1) 구간을 읽어 각 줄이 빈 줄인지 배열로 돌려줌
+	function blankRows(y0, y1) {
+		const h = y1 - y0;
+		const w = Math.min(img.naturalWidth, 1024); // 가로는 줄여도 빈 줄 판정에 충분
+		const c = document.createElement('canvas');
+		c.width = w; c.height = h;
+		const ctx = c.getContext('2d', { willReadFrequently: true });
+		ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);     // 투명 → 흰색
+		ctx.drawImage(img, 0, y0, img.naturalWidth, h, 0, 0, w, h);
+		let d;
+		try {
+			d = ctx.getImageData(0, 0, w, h).data;
+		} catch (e) {
+			// 캔버스가 오염(tainted)되어 픽셀을 읽을 수 없으면 빈 줄 없음으로 처리
+			console.warn('픽셀을 읽을 수 없어 등분으로 자릅니다:', e.message);
+			return new Array(h).fill(false);
+		}
+		const out = new Array(h);
+		for (let y = 0; y < h; y++) {
+			let min = 255, max = 0, i = y * w * 4;
+			for (let x = 0; x < w; x++, i += 4) {
+				const g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+				if (g < min) min = g;
+				if (g > max) max = g;
+				if (max - min > BLANK_THRESHOLD) break;
+			}
+			out[y] = (max - min) <= BLANK_THRESHOLD;
+		}
+		return out;
+	}
+
+	// 분할 위치 결정 → [{y0, y1, smart}] (smart: 빈 줄에서 잘랐는지)
+	function segments(naturalH, pageH, smart) {
+		const segs = [];
+		let y0 = 0;
+		while (naturalH - y0 > pageH) {
+			const yIdeal = y0 + pageH;
+			let cut = yIdeal, found = false;
+			if (smart) {
+				const span = Math.floor(pageH * SEARCH_RATIO);
+				const from = yIdeal - span;
+				const blank = blankRows(from, yIdeal);
+				for (let y = yIdeal - 1; y > from; y--) {
+					if (blank[y - from]) { cut = y; found = true; break; }
+				}
+			}
+			segs.push({ y0, y1: cut, smart: found });
+			y0 = cut;
+		}
+		segs.push({ y0, y1: naturalH, smart: false });
+		return segs;
+	}
+
+	// 조각 하나를 캔버스에 그려 페이지 요소로 만듦
+	function makePage(seg, idx, total, dispW, scale) {
+		const srcH = seg.y1 - seg.y0;
+		const rs = Math.min(1, MAX_RENDER_W / img.naturalWidth); // 렌더 축소율
+		const c = document.createElement('canvas');
+		c.width  = Math.round(img.naturalWidth * rs);
+		c.height = Math.max(1, Math.round(srcH * rs));
+		const ctx = c.getContext('2d');
+		ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+		ctx.drawImage(img, 0, seg.y0, img.naturalWidth, srcH, 0, 0, c.width, c.height);
+		c.style.width  = `${dispW}px`;
+		c.style.height = `${srcH * scale}px`;
+
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.appendChild(c);
+		if (idx < total - 1) {
+			const cut = document.createElement('div');
+			cut.className = 'cut';
+			cut.style.top = `${srcH * scale}px`;
+			cut.innerHTML = `<span>${seg.smart ? '빈 줄에서 자름' : '등분'} · y=${seg.y1}</span>`;
+			page.appendChild(cut);
+		}
+		const num = document.createElement('div');
+		num.className = 'num';
+		num.textContent = `${idx + 1} / ${total}`;
+		page.appendChild(num);
+		return page;
+	}
+
+	function render() {
+		const m = applyMargin();
+		if (!img) return;
+
+		const { dispW, scale, pageH } = layout(img.naturalWidth, fitBox.checked, m);
+		const segs = segments(img.naturalHeight, pageH, smartBox.checked);
+
+		pagesEl.innerHTML = '';
+		segs.forEach((seg, i) => pagesEl.appendChild(makePage(seg, i, segs.length, dispW, scale)));
+
+		const smartCount = segs.filter(s => s.smart).length;
+		status.textContent =
+			`${fileName} · ${img.naturalWidth} × ${img.naturalHeight} px · 여백 ${m}mm · ${segs.length}페이지` +
+			(smartBox.checked && segs.length > 1 ? ` (빈 줄 컷 ${smartCount} / ${segs.length - 1})` : '');
+		printBtn.disabled = false;
+	}
+
+	fileInput.addEventListener('change', () => {
+		const file = fileInput.files[0];
+		if (!file) return;
+
+		if (objectUrl) URL.revokeObjectURL(objectUrl);
+		objectUrl = URL.createObjectURL(file);
+		fileName = file.name;
+
+		const im = new Image();
+		im.onload = () => { img = im; render(); };
+		im.onerror = () => {
+			img = null;
+			pagesEl.innerHTML = '';
+			printBtn.disabled = true;
+			status.textContent = `이미지를 열 수 없습니다: ${fileName}`;
+		};
+		im.src = objectUrl;
+		status.textContent = '불러오는 중…';
+	});
+
+	fitBox.addEventListener('change', render);
+	smartBox.addEventListener('change', render);
+	marginIn.addEventListener('input', render);
+	marginIn.addEventListener('change', () => { marginIn.value = marginMm(); render(); });
+	printBtn.addEventListener('click', () => window.print());
+	applyMargin();
+});
+</script>
+</head>
+<body>
+
+<div class="toolbar">
+	<input type="file" id="file" accept="image/png,image/jpeg,image/bmp,image/gif,image/webp">
+	<label><input type="checkbox" id="fit"> 폭 맞춤 (작은 이미지도 A4 폭까지 확대)</label>
+	<label><input type="checkbox" id="smart" checked> 배경(빈 줄)에 맞춰 자르기</label>
+	<label>여백 <input type="number" id="margin" min="0" max="30" step="1" value="10" style="width:4em"> mm</label>
+	<button id="print" disabled>인쇄</button>
+	<span id="status">이미지를 선택하세요.</span>
+</div>
+
+<div id="pages"></div>
+
+</body>
+</html>

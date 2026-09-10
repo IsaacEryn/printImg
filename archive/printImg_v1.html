@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PrintImg (HTML)</title>
+<style id="page-style">
+	/* 여백에 따라 JS가 다시 씀 */
+	@page { size: A4 portrait; margin: 10mm; }
+</style>
+<style>
+	/* ---------- 화면 공통 ---------- */
+	:root {
+		--sheet-w: 190mm;   /* A4 210mm - 여백×2, JS가 갱신 */
+		--sheet-h: 277mm;   /* A4 297mm - 여백×2, JS가 갱신 */
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		font: 14px/1.5 system-ui, "Malgun Gothic", sans-serif;
+		background: #e9e9ec;
+		color: #222;
+	}
+	.toolbar {
+		position: sticky; top: 0; z-index: 10;
+		display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+		padding: 10px 16px;
+		background: #fff;
+		border-bottom: 1px solid #ccc;
+	}
+	.toolbar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+	.toolbar button { padding: 6px 14px; font: inherit; cursor: pointer; }
+	.toolbar input[type=number] { font: inherit; padding: 3px 4px; }
+	.toolbar button:disabled { cursor: not-allowed; opacity: .5; }
+	#status { color: #555; }
+
+	.sheet {
+		position: relative;
+		width: var(--sheet-w);
+		margin: 20px auto;
+		background: #fff;
+		box-shadow: 0 0 8px rgba(0,0,0,.25);
+		min-height: var(--sheet-h);
+	}
+	.sheet:empty::after {
+		content: "이미지를 선택하세요";
+		display: block; padding: 40px; text-align: center; color: #999;
+	}
+
+	/* 이미지: 기본은 원본 크기(최대 폭 제한), 폭 맞춤이면 100% */
+	#img {
+		display: block;
+		max-width: 100%;
+		height: auto;
+	}
+	#img.fit { width: 100%; }
+
+	/* 화면에서만 보이는 페이지 경계선 */
+	.break {
+		position: absolute; left: 0; right: 0;
+		border-top: 1px dashed #d33;
+		pointer-events: none;
+	}
+	.break span {
+		position: absolute; right: 4px; top: -18px;
+		font-size: 11px; color: #d33; background: rgba(255,255,255,.8); padding: 0 4px;
+	}
+
+	/* ---------- 인쇄 시 ---------- */
+	@media print {
+		body { background: #fff; }
+		.toolbar, .break { display: none !important; }
+		.sheet {
+			width: auto; min-height: 0; margin: 0;
+			box-shadow: none;
+		}
+	}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+	<input type="file" id="file" accept="image/png,image/jpeg,image/bmp,image/gif,image/webp">
+	<label><input type="checkbox" id="fit"> 폭 맞춤 (작은 이미지도 A4 폭까지 확대)</label>
+	<label>여백 <input type="number" id="margin" min="0" max="30" step="1" value="10" style="width:4em"> mm</label>
+	<button id="print" disabled>인쇄</button>
+	<span id="status">이미지를 선택하세요.</span>
+</div>
+
+<div class="sheet" id="sheet"></div>
+
+<script>
+(function () {
+	const MM_PER_INCH = 25.4, CSS_DPI = 96;
+	const A4_W_MM = 210, A4_H_MM = 297;
+	const mmToPx = mm => mm / MM_PER_INCH * CSS_DPI;
+
+	const fileInput = document.getElementById('file');
+	const fitBox    = document.getElementById('fit');
+	const printBtn  = document.getElementById('print');
+	const status    = document.getElementById('status');
+	const sheet     = document.getElementById('sheet');
+	const marginIn  = document.getElementById('margin');
+	const pageStyle = document.getElementById('page-style');
+
+	let img = null;        // 현재 <img>
+	let objectUrl = null;  // 해제용
+	let fileName = '';
+
+	// 여백(mm)을 0~30으로 정리해서 돌려줌
+	function marginMm() {
+		let m = parseFloat(marginIn.value);
+		if (!Number.isFinite(m)) m = 10;
+		m = Math.min(30, Math.max(0, m));
+		return m;
+	}
+
+	// 여백을 @page 규칙과 화면 미리보기 크기에 반영
+	function applyMargin() {
+		const m = marginMm();
+		pageStyle.textContent = `@page { size: A4 portrait; margin: ${m}mm; }`;
+		document.documentElement.style.setProperty('--sheet-w', `${A4_W_MM - 2 * m}mm`);
+		document.documentElement.style.setProperty('--sheet-h', `${A4_H_MM - 2 * m}mm`);
+		return m;
+	}
+
+	// 인쇄 폭에서의 이미지 표시 크기와 예상 페이지 수 계산
+	function layout(naturalW, naturalH, fit, m) {
+		const sheetW = mmToPx(A4_W_MM - 2 * m);
+		const sheetH = mmToPx(A4_H_MM - 2 * m);
+		const w = fit ? sheetW : Math.min(naturalW, sheetW);
+		const h = naturalH * (w / naturalW);
+		return { w, h, pages: Math.max(1, Math.ceil(h / sheetH)) };
+	}
+
+	function render() {
+		const m = applyMargin();
+		if (!img) return;
+		img.classList.toggle('fit', fitBox.checked);
+
+		const { pages } = layout(img.naturalWidth, img.naturalHeight, fitBox.checked, m);
+
+		// 기존 경계선 제거 후 다시 그림
+		sheet.querySelectorAll('.break').forEach(el => el.remove());
+		for (let i = 1; i < pages; i++) {
+			const line = document.createElement('div');
+			line.className = 'break';
+			line.style.top = `calc(${i} * var(--sheet-h))`;
+			line.innerHTML = `<span>${i} / ${pages} 페이지 끝</span>`;
+			sheet.appendChild(line);
+		}
+
+		status.textContent =
+			`${fileName} · ${img.naturalWidth} × ${img.naturalHeight} px · 여백 ${m}mm · 예상 ${pages}페이지`;
+		printBtn.disabled = false;
+	}
+
+	fileInput.addEventListener('change', () => {
+		const file = fileInput.files[0];
+		if (!file) return;
+
+		if (objectUrl) URL.revokeObjectURL(objectUrl);
+		objectUrl = URL.createObjectURL(file);
+		fileName = file.name;
+
+		sheet.innerHTML = '';
+		img = document.createElement('img');
+		img.id = 'img';
+		img.alt = fileName;
+		img.onload = render;
+		img.onerror = () => {
+			sheet.innerHTML = '';
+			img = null;
+			printBtn.disabled = true;
+			status.textContent = `이미지를 열 수 없습니다: ${fileName}`;
+		};
+		img.src = objectUrl;
+		sheet.appendChild(img);
+		status.textContent = '불러오는 중…';
+	});
+
+	fitBox.addEventListener('change', render);
+	marginIn.addEventListener('input', render);
+	marginIn.addEventListener('change', () => { marginIn.value = marginMm(); render(); });
+	printBtn.addEventListener('click', () => window.print());
+	applyMargin();
+})();
+</script>
+</body>
+</html>

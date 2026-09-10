@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PrintImg v3 (HTML)</title>
+<style>
+	/* 용지 여백은 0으로 고정한다. 브라우저 머리글·바닥글은 용지 여백에 그려지므로
+	   여백이 0이면 Chrome/Edge가 아예 출력하지 않는다. 사용자 여백은 .page의 padding으로 준다. */
+	@page { size: A4 portrait; margin: 0; }
+</style>
+<style>
+	/* ---------- 색·크기 토큰 ---------- */
+	:root {
+		--page-w: 210mm;          /* A4 용지 폭 */
+		--page-ratio: 210 / 297;  /* A4 비율 (화면 미리보기용) */
+		--margin: 5mm;            /* 인쇄용 여백, applyMargin()이 갱신 */
+		--margin-pct: 2.381%;     /* 화면용 여백 = 여백 / 210mm. 폭 기준 %라 축소해도 비율 유지 */
+		--bg: #e9e9ec;
+		--panel: #fff;
+		--line: #c9c9cf;
+		--text: #1f1f24;
+		--muted: #5a5a63;   /* 흰 배경 대비 6.5:1 */
+		--accent: #1a5fb4;  /* 흰 배경 대비 6.3:1 */
+		--danger: #b3261e;  /* 흰 배경 대비 5.9:1 */
+		--focus: #005fcc;
+	}
+	* { box-sizing: border-box; }
+	body {
+		margin: 0;
+		font: 15px/1.5 system-ui, "Malgun Gothic", sans-serif;
+		background: var(--bg);
+		color: var(--text);
+	}
+	h1 { font-size: 18px; margin: 0; }
+	h2 { font-size: 14px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+
+	/* 키보드 포커스: 모든 컨트롤에 굵은 링 */
+	:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+	/* ---------- 레이아웃: 왼쪽 설정 패널 + 오른쪽 미리보기 ---------- */
+	.app {
+		display: grid;
+		grid-template-columns: 1fr;
+		min-height: 100vh;
+	}
+	@media (min-width: 900px) {
+		.app { grid-template-columns: 320px minmax(0, 1fr); }
+		.panel { position: sticky; top: 0; height: 100vh; overflow: auto; }
+	}
+	.panel {
+		background: var(--panel);
+		border-right: 1px solid var(--line);
+		padding: 20px;
+		display: flex; flex-direction: column; gap: 22px;
+	}
+	.panel section, .panel fieldset {
+		border: 1px solid var(--line); border-radius: 8px;
+		padding: 14px; margin: 0;
+	}
+	.panel legend { font-size: 14px; color: var(--muted); font-weight: 600; padding: 0 4px; }
+	.field { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+	.field.stack { flex-direction: column; align-items: stretch; gap: 4px; }
+	.field input[type=checkbox] { width: 18px; height: 18px; margin: 0; }
+	.field input[type=number], .field select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+	.field input[type=number] { width: 6em; }
+	.field select:disabled { color: var(--muted); background: #f4f4f6; }
+	.field input[type=color] { width: 36px; height: 32px; padding: 2px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; }
+	.field input[type=color]:disabled { cursor: not-allowed; opacity: .5; }
+	input[type=file] { font: inherit; max-width: 100%; }
+	.hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+	button {
+		font: inherit; font-weight: 600;
+		padding: 10px 16px; width: 100%;
+		border: 0; border-radius: 8px;
+		background: var(--accent); color: #fff; cursor: pointer;
+	}
+	button:disabled { background: #9a9aa3; cursor: not-allowed; }
+	#fileInfo { margin: 8px 0 0; word-break: break-all; }
+	#status { margin: 10px 0 0; min-height: 1.5em; }
+	#error { margin: 10px 0 0; color: var(--danger); font-weight: 600; }
+	#error:empty { display: none; }
+	kbd { font: inherit; font-size: 12px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; background: #f4f4f6; }
+
+	/* ---------- 미리보기 ---------- */
+	.preview { padding: 20px 16px; min-width: 0; }
+	#pages:empty::after {
+		content: "왼쪽에서 이미지를 선택하면 여기에 페이지 미리보기가 나타납니다.";
+		display: block; padding: 40px 20px; text-align: center; color: var(--muted);
+	}
+	/* 페이지 한 장 = 용지(여백 포함). 안쪽 .content가 인쇄 영역, 그 안에 조각 캔버스 하나 */
+	.page {
+		position: relative;
+		width: var(--page-w);
+		max-width: 100%;
+		aspect-ratio: var(--page-ratio); /* 좁은 화면에서도 A4 비율 유지 */
+		padding: var(--margin-pct);
+		margin: 0 auto 24px;
+		background: #fff;
+		box-shadow: 0 0 8px rgba(0,0,0,.25);
+	}
+	.page .content { position: relative; }
+	/* 캔버스 크기: 인쇄용 정확한 px는 --w/--h, 화면에서는 폭에 맞춰 비율 유지 */
+	.page canvas { display: block; margin: 0 auto; width: var(--w); max-width: 100%; height: auto; }
+	.page .num {
+		position: absolute; right: 6px; bottom: 4px;
+		font-size: 12px; color: var(--muted);
+	}
+	.page .cut {
+		position: absolute; left: 0; right: 0;
+		border-top: 2px dashed var(--danger);
+	}
+	.page .cut span {
+		position: absolute; right: 4px; top: -20px;
+		font-size: 12px; color: var(--danger); background: rgba(255,255,255,.9); padding: 0 4px;
+	}
+
+	/* ---------- 인쇄 시 ---------- */
+	@media print {
+		body { background: #fff; }
+		.panel, .num, .cut { display: none !important; }
+		.app { display: block; min-height: 0; }
+		.preview { padding: 0; }
+		.page {
+			width: auto; max-width: none; aspect-ratio: auto; margin: 0;
+			padding: var(--margin); /* 실제 여백. @page 여백은 0 */
+			box-shadow: none;
+			break-after: page;
+		}
+		.page canvas { max-width: none; height: var(--h); }
+		.page:last-child { break-after: auto; }
+	}
+</style>
+<script>
+// head에 있으므로 DOM이 준비된 뒤 실행
+document.addEventListener('DOMContentLoaded', function () {
+	const MM_PER_INCH = 25.4, CSS_DPI = 96;
+	const A4_W_MM = 210, A4_H_MM = 297;
+	const mmToPx = mm => mm / MM_PER_INCH * CSS_DPI;
+
+	// 빈 줄 탐지 상수 (파이썬 버전과 동일)
+	const BLANK_THRESHOLD = 8;    // 한 줄의 밝기 (최대 − 최소) 가 이 이하면 빈 줄
+	const SEARCH_RATIO    = 0.3;  // 이상 경계에서 위로 page_h × 이 비율만큼 탐색
+	const MAX_RENDER_W    = 4096; // 캔버스 최대 폭 (거대 이미지 보호, 190mm 기준 약 547 DPI)
+	const RENDER_DELAY_MS = 200;  // 여백 입력 중 재계산 지연
+
+	const fileInput = document.getElementById('file');
+	const fitBox    = document.getElementById('fit');
+	const smartBox  = document.getElementById('smart');
+	const bgOn      = document.getElementById('bgOn');
+	const bgMode    = document.getElementById('bgMode');
+	const bgPick    = document.getElementById('bgPick');
+	const marginIn  = document.getElementById('margin');
+	const printBtn  = document.getElementById('print');
+	const fileInfo  = document.getElementById('fileInfo');
+	const status    = document.getElementById('status');
+	const errorEl   = document.getElementById('error');
+	const pagesEl   = document.getElementById('pages');
+
+	let img = null;          // 로드된 원본 이미지
+	let fileName = '';
+	let loadSeq = 0;         // 파일 선택 순번. 늦게 끝난 이전 로드를 무시하는 데 씀
+	let bgColor = null;      // 배경색 [r, g, b] (로드 시 자동 감지, 사용자가 고칠 수 있음)
+	let bgManual = false;    // 사용자가 색을 직접 골랐는지
+	let pixelReadFailed = false;
+	let renderTimer = null;
+
+	// ---------- 배경색 처리 ----------
+	const BG_TOLERANCE = 16;   // 배경색과 채널당 이 차이 이하면 배경 픽셀
+	const BG_WHITE_MAX = 3;    // 배경색이 흰색과 채널당 이 차이 이하면 처리할 것 없음
+	const BG_FADE_KEEP = 0.15; // 흐리게: 흰색과의 차이를 이 비율만큼만 남김
+	const BG_FADE_MIN  = 10;   // 흐리게: 그래도 최소 이만큼은 흰색과 다르게 (흔적 유지)
+
+	const BG_BORDER_RATIO = 0.02; // 테두리 띠 두께 (가로·세로 각각 이 비율)
+	const BG_BORDER_MIN   = 0.3;  // 테두리 최빈색 비중이 이보다 낮으면 전체 최빈색으로 폴백
+
+	// 픽셀 집합의 최빈색 → { rgb: [r, g, b], share: 비중 }. 채널당 8단계로 묶어 세고 그 묶음의 평균색을 씀
+	function dominantColor(d, indices) {
+		const bins = new Map();
+		for (const i of indices) {
+			const key = ((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3);
+			const b = bins.get(key) || [0, 0, 0, 0];
+			b[0]++; b[1] += d[i]; b[2] += d[i + 1]; b[3] += d[i + 2];
+			bins.set(key, b);
+		}
+		let best = null;
+		for (const b of bins.values()) if (!best || b[0] > best[0]) best = b;
+		if (!best) return null;
+		return {
+			rgb: [Math.round(best[1] / best[0]), Math.round(best[2] / best[0]), Math.round(best[3] / best[0])],
+			share: best[0] / indices.length,
+		};
+	}
+
+	// 배경색 추정 → [r, g, b] 또는 null.
+	// 배경은 보통 이미지 가장자리를 둘러싸므로 테두리 띠의 최빈색을 우선하고,
+	// 테두리가 뒤섞여 있으면 (비중 < BG_BORDER_MIN) 이미지 전체 최빈색으로 폴백한다.
+	function detectBackground(image) {
+		const w = 200, h = Math.max(1, Math.round(image.naturalHeight * w / image.naturalWidth));
+		const c = document.createElement('canvas');
+		c.width = w; c.height = h;
+		const ctx = c.getContext('2d', { willReadFrequently: true });
+		ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+		ctx.drawImage(image, 0, 0, w, h);
+		let d;
+		try { d = ctx.getImageData(0, 0, w, h).data; } catch (e) { return null; }
+
+		const bw = Math.max(1, Math.round(w * BG_BORDER_RATIO));
+		const bh = Math.max(1, Math.round(h * BG_BORDER_RATIO));
+		const border = [], all = [];
+		for (let y = 0; y < h; y++) {
+			for (let x = 0; x < w; x++) {
+				const i = (y * w + x) * 4;
+				all.push(i);
+				if (x < bw || x >= w - bw || y < bh || y >= h - bh) border.push(i);
+			}
+		}
+		const b = dominantColor(d, border);
+		if (b && b.share >= BG_BORDER_MIN) return b.rgb;
+		const a = dominantColor(d, all);
+		return a ? a.rgb : null;
+	}
+
+	const hexToRgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+
+	// ImageData의 배경 픽셀을 제거(흰색) 또는 흐리게(흰색에 가깝게) 바꿈
+	function applyBackground(data, bg, mode) {
+		const [br, bgc, bb] = bg;
+		for (let i = 0; i < data.length; i += 4) {
+			const r = data[i], g = data[i + 1], b = data[i + 2];
+			if (Math.abs(r - br) > BG_TOLERANCE || Math.abs(g - bgc) > BG_TOLERANCE || Math.abs(b - bb) > BG_TOLERANCE) continue;
+			if (mode === 'remove') {
+				data[i] = data[i + 1] = data[i + 2] = 255;
+			} else {
+				// 흰색과의 차이 벡터를 줄이되, 너무 옅어지면 최소 흔적은 남김
+				const dr = 255 - r, dg = 255 - g, db = 255 - b;
+				const s = Math.max(dr, dg, db);
+				if (s === 0) continue;
+				const t = Math.max(BG_FADE_MIN, s * BG_FADE_KEEP) / s;
+				data[i] = Math.round(255 - dr * t);
+				data[i + 1] = Math.round(255 - dg * t);
+				data[i + 2] = Math.round(255 - db * t);
+			}
+		}
+	}
+
+	const toHex = rgb => '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join('');
+	const bgIsWhite = rgb => rgb.every(v => 255 - v <= BG_WHITE_MAX);
+
+	// 여백(mm)을 0~30으로 정리해서 돌려줌
+	function marginMm() {
+		let m = parseFloat(marginIn.value);
+		if (!Number.isFinite(m)) m = 5;
+		return Math.min(30, Math.max(0, m));
+	}
+
+	// 여백을 인쇄용(mm)과 화면용(%) 변수에 반영
+	function applyMargin() {
+		const m = marginMm();
+		document.documentElement.style.setProperty('--margin', `${m}mm`);
+		document.documentElement.style.setProperty('--margin-pct', `${m / A4_W_MM * 100}%`);
+		return m;
+	}
+
+	// 배율과 한 페이지에 들어가는 원본 높이 계산
+	function layout(naturalW, fit, m) {
+		const sheetW = mmToPx(A4_W_MM - 2 * m);
+		const sheetH = mmToPx(A4_H_MM - 2 * m) - 0.5; // 딱 맞으면 반올림으로 빈 장이 생길 수 있어 살짝 여유
+		const dispW  = fit ? sheetW : Math.min(naturalW, sheetW);
+		const scale  = dispW / naturalW;                        // 원본 1px → CSS px
+		const pageH  = Math.max(1, Math.floor(sheetH / scale)); // 한 페이지 높이 (원본 px)
+		return { dispW, scale, pageH, sheetH };
+	}
+
+	// 원본의 [y0, y1) 구간을 캔버스에 그려 돌려줌 (투명은 흰색으로)
+	function drawSlice(y0, y1, destW, readable) {
+		const srcH = y1 - y0;
+		const c = document.createElement('canvas');
+		c.width  = destW;
+		c.height = Math.max(1, Math.round(srcH * destW / img.naturalWidth));
+		const ctx = c.getContext('2d', readable ? { willReadFrequently: true } : undefined);
+		ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+		ctx.drawImage(img, 0, y0, img.naturalWidth, srcH, 0, 0, c.width, c.height);
+		return { canvas: c, ctx };
+	}
+
+	// 원본의 [y0, y1) 구간에서 각 줄이 빈 줄인지 Uint8Array(1=빈 줄)로 돌려줌
+	function blankRows(y0, y1) {
+		const h = y1 - y0;
+		const w = Math.min(img.naturalWidth, MAX_RENDER_W);
+		const { ctx } = drawSlice(y0, y1, w, true);
+		let d;
+		try {
+			d = ctx.getImageData(0, 0, w, h).data;
+		} catch (e) {
+			// 캔버스가 오염(tainted)되어 픽셀을 읽을 수 없음 → 상태줄에 알리고 등분
+			pixelReadFailed = true;
+			return new Uint8Array(h);
+		}
+		const out = new Uint8Array(h);
+		for (let y = 0; y < h; y++) {
+			let min = 255, max = 0, i = y * w * 4;
+			for (let x = 0; x < w; x++, i += 4) {
+				const g = (d[i] * 299 + d[i + 1] * 587 + d[i + 2] * 114) / 1000;
+				if (g < min) min = g;
+				if (g > max) max = g;
+				if (max - min > BLANK_THRESHOLD) break;
+			}
+			out[y] = (max - min) <= BLANK_THRESHOLD ? 1 : 0;
+		}
+		return out;
+	}
+
+	// 분할 위치 결정 → [{y0, y1, smart}] (smart: 빈 줄에서 잘랐는지)
+	function segments(naturalH, pageH, smart) {
+		const segs = [];
+		let y0 = 0;
+		while (naturalH - y0 > pageH) {
+			const yIdeal = y0 + pageH;
+			let cut = yIdeal, found = false;
+			if (smart) {
+				const span = Math.floor(pageH * SEARCH_RATIO);
+				const from = Math.max(y0 + 1, yIdeal - span);
+				const blank = blankRows(from, yIdeal);
+				for (let y = yIdeal - 1; y >= from; y--) {
+					if (blank[y - from]) { cut = y; found = true; break; }
+				}
+			}
+			segs.push({ y0, y1: cut, smart: found });
+			y0 = cut;
+		}
+		segs.push({ y0, y1: naturalH, smart: false });
+		return segs;
+	}
+
+	// 조각 하나를 페이지 요소로 만듦
+	function makePage(seg, idx, total, dispW, scale, renderW, sheetH) {
+		const srcH = seg.y1 - seg.y0;
+		const { canvas, ctx } = drawSlice(seg.y0, seg.y1, renderW, bgOn.checked);
+		if (bgOn.checked && bgColor && !bgIsWhite(bgColor)) {
+			try {
+				const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
+				applyBackground(id.data, bgColor, bgMode.value);
+				ctx.putImageData(id, 0, 0);
+			} catch (e) {
+				pixelReadFailed = true;
+			}
+		}
+		canvas.style.setProperty('--w', `${dispW}px`);
+		canvas.style.setProperty('--h', `${srcH * scale}px`);
+		canvas.setAttribute('role', 'img');
+		canvas.setAttribute('aria-label', `${fileName} ${idx + 1} / ${total} 페이지`);
+
+		const page = document.createElement('div');
+		page.className = 'page';
+		page.setAttribute('role', 'group');
+		page.setAttribute('aria-label', `${total}장 중 ${idx + 1}장`);
+		const content = document.createElement('div');
+		content.className = 'content';
+		content.appendChild(canvas);
+		page.appendChild(content);
+
+		if (idx < total - 1) {
+			const cut = document.createElement('div');
+			cut.className = 'cut';
+			cut.setAttribute('aria-hidden', 'true');
+			cut.style.top = '100%'; // 인쇄 영역(.content) 바닥 = 조각 끝
+			cut.innerHTML = `<span>${seg.smart ? '빈 줄에서 자름' : '등분'} · y=${seg.y1}</span>`;
+			content.appendChild(cut);
+		}
+		const num = document.createElement('div');
+		num.className = 'num';
+		num.setAttribute('aria-hidden', 'true');
+		num.textContent = `${idx + 1} / ${total}`;
+		page.appendChild(num);
+		return page;
+	}
+
+	function render() {
+		const m = applyMargin();
+		if (!img) return;
+
+		const { dispW, scale, pageH, sheetH } = layout(img.naturalWidth, fitBox.checked, m);
+		const renderW = Math.min(img.naturalWidth, MAX_RENDER_W);
+		pixelReadFailed = false;
+		const segs = segments(img.naturalHeight, pageH, smartBox.checked);
+
+		pagesEl.replaceChildren(
+			...segs.map((seg, i) => makePage(seg, i, segs.length, dispW, scale, renderW, sheetH))
+		);
+
+		const notes = [];
+		if (smartBox.checked && segs.length > 1) {
+			const smartCount = segs.filter(s => s.smart).length;
+			notes.push(`빈 줄 컷 ${smartCount} / ${segs.length - 1}`);
+		}
+		if (renderW < img.naturalWidth) notes.push(`인쇄용 렌더링 폭 ${renderW}px로 축소`);
+		if (bgOn.checked) {
+			if (!bgColor) notes.push('배경색 감지 실패');
+			else if (bgIsWhite(bgColor)) notes.push(`배경 ${toHex(bgColor)}은 이미 흰색`);
+			else notes.push(`배경 ${toHex(bgColor)}${bgManual ? '(직접 지정)' : ''} ${bgMode.value === 'remove' ? '제거' : '흐리게'}`);
+		}
+
+		status.textContent = `여백 ${m}mm · ${segs.length}페이지` + (notes.length ? ` (${notes.join(', ')})` : '');
+		errorEl.textContent = pixelReadFailed ? '이미지 픽셀을 읽을 수 없어 빈 줄 판정과 배경색 처리를 건너뛰었습니다.' : '';
+		printBtn.disabled = false;
+	}
+
+	// 여백 입력 중에는 잠시 기다렸다가 한 번만 다시 계산
+	function renderSoon() {
+		clearTimeout(renderTimer);
+		renderTimer = setTimeout(render, RENDER_DELAY_MS);
+	}
+
+	fileInput.addEventListener('change', () => {
+		const file = fileInput.files[0];
+		fileInput.value = ''; // 같은 파일을 다시 골라도 change가 나도록 비움
+		if (!file) return;
+
+		const seq = ++loadSeq;
+		const url = URL.createObjectURL(file);
+		fileName = file.name;
+		fileInfo.textContent = `${file.name} · 불러오는 중…`;
+		errorEl.textContent = '';
+
+		const im = new Image();
+		im.onload = () => {
+			URL.revokeObjectURL(url);
+			if (seq !== loadSeq) return; // 그 사이 다른 파일을 골랐으면 무시
+			img = im;
+			bgColor = detectBackground(im);
+			bgManual = false;
+			if (bgColor) bgPick.value = toHex(bgColor);
+			fileInfo.textContent = `${file.name} · ${im.naturalWidth} × ${im.naturalHeight} px`;
+			render();
+		};
+		im.onerror = () => {
+			URL.revokeObjectURL(url);
+			if (seq !== loadSeq) return;
+			img = null;
+			pagesEl.replaceChildren();
+			printBtn.disabled = true;
+			fileInfo.textContent = file.name;
+			status.textContent = '';
+			errorEl.textContent = `이미지를 열 수 없습니다: ${file.name}`;
+		};
+		im.src = url;
+	});
+
+	fitBox.addEventListener('change', render);
+	smartBox.addEventListener('change', render);
+	bgOn.addEventListener('change', () => { bgMode.disabled = bgPick.disabled = !bgOn.checked; render(); });
+	bgPick.addEventListener('change', () => { bgColor = hexToRgb(bgPick.value); bgManual = true; render(); });
+	bgMode.addEventListener('change', render);
+	marginIn.addEventListener('input', renderSoon);
+	marginIn.addEventListener('change', () => { clearTimeout(renderTimer); marginIn.value = marginMm(); render(); });
+	printBtn.addEventListener('click', () => window.print());
+	applyMargin();
+});
+</script>
+</head>
+<body>
+
+<div class="app">
+	<aside class="panel" aria-label="설정">
+		<h1>PrintImg v3 <span class="hint" style="display:inline">이미지를 A4로 나눠 인쇄</span></h1>
+
+		<section aria-labelledby="h-file">
+			<h2 id="h-file">1. 이미지 선택</h2>
+			<label for="file" class="hint" style="margin:0 0 6px">PNG, JPG, BMP, GIF, WEBP</label>
+			<input type="file" id="file" accept="image/png,image/jpeg,image/bmp,image/gif,image/webp">
+			<p id="fileInfo" aria-live="polite">선택된 파일 없음</p>
+		</section>
+
+		<fieldset>
+			<legend>2. 옵션</legend>
+			<div class="field">
+				<input type="checkbox" id="fit">
+				<label for="fit">폭 맞춤 (작은 이미지도 A4 폭까지 확대)</label>
+			</div>
+			<div class="field">
+				<input type="checkbox" id="smart" checked>
+				<label for="smart">배경(빈 줄)에 맞춰 자르기</label>
+			</div>
+			<div class="field">
+				<input type="checkbox" id="bgOn">
+				<label for="bgOn">배경색</label>
+				<select id="bgMode" aria-label="배경색 처리 방식" disabled>
+					<option value="remove">제거</option>
+					<option value="fade">흐리게</option>
+				</select>
+				<label for="bgOn">변경</label>
+				<input type="color" id="bgPick" value="#ffffff" aria-label="배경색 값 (자동 감지, 직접 고칠 수 있음)" title="감지된 배경색. 틀리면 직접 고르세요" disabled>
+			</div>
+			<div class="field stack">
+				<label for="margin">여백 (mm)</label>
+				<input type="number" id="margin" min="0" max="30" step="1" value="5" inputmode="numeric" aria-describedby="margin-hint">
+				<span id="margin-hint" class="hint">0~30 사이. 네 변 동일.</span>
+			</div>
+		</fieldset>
+
+		<section aria-labelledby="h-print">
+			<h2 id="h-print">3. 인쇄</h2>
+			<button type="button" id="print" disabled>인쇄</button>
+			<p class="hint"><kbd>Ctrl</kbd>+<kbd>P</kbd>로도 인쇄할 수 있습니다.</p>
+			<p id="status" role="status" aria-live="polite"></p>
+			<p id="error" role="alert"></p>
+			<p class="hint">인쇄 대화상자에서 여백은 <strong>기본값</strong>, 배율은 <strong>100%</strong>로 두세요. 바꾸면 페이지가 어긋납니다. 머리글·바닥글은 켜져 있어도 출력되지 않습니다.</p>
+		</section>
+	</aside>
+
+	<main class="preview" aria-label="미리보기">
+		<div id="pages"></div>
+	</main>
+</div>
+
+</body>
+</html>
