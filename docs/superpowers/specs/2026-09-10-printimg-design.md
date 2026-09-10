@@ -69,7 +69,8 @@ printImg/
 - 원본 픽셀의 가정 밀도 = 96 DPI (원본 크기 모드에서만 사용)
 
 계산:
-- `usable_w = round((210 − 2·margin_mm) / 25.4 × 300)`, `usable_h`도 같은 식으로.
+- `margin_px = mm_to_px(margin_mm)`, `usable_w = 2480 − 2·margin_px`, `usable_h = 3508 − 2·margin_px`.
+  (인쇄 영역을 직접 반올림하지 않고 여백을 먼저 반올림하는 이유: 좌우/상하 여백이 항상 정확히 같은 `margin_px`가 되어 가운데 정렬이 대칭을 유지한다.)
 - 배율 `scale` (원본 1 px → 출력 px)
   - 폭 맞춤: `scale = usable_w / img_w`
   - 원본 크기: `scale = 300 / 96 = 3.125`. 단 `img_w × 3.125 > usable_w`이면 폭 맞춤으로 전환.
@@ -128,6 +129,7 @@ printImg/
 | 출력 PDF 이미 존재 | 덮어쓸지 예/아니오 |
 | 출력 PDF가 열려 있어 쓰기 실패 (`PermissionError`) | "PDF가 열려 있습니다. 닫고 다시 시도하세요" |
 | Pillow 픽셀 한도 초과 (`DecompressionBombError`) | "이미지가 너무 큽니다". 한도는 기본값 유지 |
+| 페이지 수가 `MAX_PAGES`(50) 초과 | "페이지가 너무 많습니다 (N페이지, 최대 50페이지)." + PDF 저장하지 않음 |
 | PDF 자동 열기 실패 | 저장 경로만 안내, 오류로 취급하지 않음 |
 
 경계 입력: 높이가 한 페이지 이하면 1페이지. 여백 30 mm에 원본 크기 모드로 폭이 넘치면 폭 맞춤 전환.
