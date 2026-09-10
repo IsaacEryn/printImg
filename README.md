@@ -30,7 +30,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-## 빌드 (exe)
+## 빌드 (Windows exe)
 
 ```
 python -m pip install pyinstaller
@@ -38,6 +38,27 @@ scripts\build.bat
 ```
 
 결과물: `dist\PrintImg.exe`
+
+## 빌드 (macOS .app)
+
+맥에서만 빌드할 수 있습니다 (PyInstaller는 크로스 빌드를 지원하지 않습니다). python.org의 Python 3.12 이상(Tk 포함)을 설치한 뒤:
+
+```
+chmod +x scripts/build.sh
+scripts/build.sh
+```
+
+결과물: `dist/PrintImg.app`. 처음 실행 시 "확인되지 않은 개발자" 경고가 뜨면 앱을 우클릭 → 열기.
+
+맥에서는 "바로 인쇄…"가 CUPS(`lpstat`, `lpr`)를 씁니다. 프린터 목록이 비어 있으면 시스템 설정 → 프린터 및 스캐너에서 프린터를 먼저 추가하세요.
+
+### 맥에서 확인할 것
+
+- [ ] `python3 -m pytest` 통과
+- [ ] `python3 src/main.py`로 창이 뜨고, 이미지 선택 → PDF 만들기 → 미리보기 앱이 열린다
+- [ ] 배경색 견본(작은 사각형)에 감지된 색이 보이고, 버튼을 누르면 색 선택창이 뜬다
+- [ ] "바로 인쇄…" 미리보기 창의 프린터 목록에 `lpstat -p`와 같은 이름이 보이고, 인쇄하면 A4 3장이 나온다
+- [ ] `scripts/build.sh`로 만든 `PrintImg.app`이 위와 같이 동작한다
 
 ## 릴리스 전 수동 확인
 

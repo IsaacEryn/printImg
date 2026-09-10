@@ -33,7 +33,8 @@ printImg/
 │   ├── paginate.py    # 순수 로직: 배율 계산 + 분할 위치 결정
 │   ├── background.py  # 배경색 감지, 제거·흐리게 (Pillow만 사용)
 │   ├── preview.py     # 인쇄 미리보기 창 (썸네일, 프린터 선택)
-│   ├── printer.py     # pywin32로 페이지를 프린터에 직접 출력
+│   ├── printer.py     # 프린터 직접 출력: Windows는 pywin32, 맥·리눅스는 CUPS
+│   ├── desktop.py     # 기본 앱으로 파일 열기 (startfile / open / xdg-open)
 │   └── pdf_writer.py  # 조각을 A4 캔버스에 얹어 PDF 저장
 ├── tests/
 │   ├── test_paginate.py
@@ -189,3 +190,13 @@ GUI: `☐ 빈 줄에 맞춰 자르기`, `☐ 배경색 [제거|흐리게] [#eeed
 오류: 프린터 없음 → "설치된 프린터가 없습니다."; 인쇄 중 예외 → "인쇄에 실패했습니다." + 예외. 상태줄 예: `3페이지 (빈 줄 컷 2/2) 인쇄 전송 → iR-ADV C3525`.
 
 의존성: `pywin32`(Windows 전용). PyInstaller spec에 썸네일용 `PIL._tkinter_finder` 숨은 import.
+
+## 12. 맥 지원 (2026-09-10 추가)
+
+플랫폼 의존 코드는 두 곳뿐이다.
+- `desktop.open_file(path)`: Windows `os.startfile`, 맥 `open`, 리눅스 `xdg-open`. `open_command(path, platform)`은 순수 함수로 테스트.
+- `printer`: `sys.platform`으로 백엔드를 고른다. Windows는 pywin32 GDI(기존). 맥·리눅스는 CUPS: `lpstat -p`/`lpstat -d` 출력을 `parse_lpstat_printers`/`parse_lpstat_default`로 읽고, 페이지를 임시 PDF(`pdf_writer.save_pages`)로 저장한 뒤 `lpr -P 프린터 -T 작업명 -o media=A4 -o fit-to-page`로 보낸다. `lpstat`이 없으면 프린터 없음으로 처리.
+
+GUI의 배경색 견본은 `tk.Button(bg=…)` 대신 `Canvas` 사각형 + `ttk.Button`(hex 표시)으로 바꿨다. 맥 Aqua는 버튼 배경색을 무시하고 `SystemButtonFace` 색 이름도 없다.
+
+의존성: `pywin32; sys_platform == "win32"`. 빌드: `PrintImg-mac.spec`(BUNDLE → `dist/PrintImg.app`) + `scripts/build.sh`. 맥 빌드와 실제 인쇄 확인은 맥에서만 가능하다 (README 체크리스트).

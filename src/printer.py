@@ -1,10 +1,21 @@
-"""Windows 프린터로 페이지 이미지를 바로 보낸다. pywin32는 실제 인쇄 함수 안에서만 import한다."""
+"""페이지 이미지를 프린터로 바로 보낸다.
+
+Windows는 pywin32(GDI), 맥·리눅스는 CUPS(lpstat/lpr)를 쓴다. 플랫폼 전용 모듈은 함수 안에서 import한다.
+"""
 
 from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import tempfile
 
 from PIL import Image
 
 Box = tuple[int, int, int, int]
+
+
+# ----- 공통 순수 함수 -----
 
 
 def page_box(phys_w: int, phys_h: int, off_x: int, off_y: int, page_w: int, page_h: int) -> Box:
@@ -21,8 +32,54 @@ def page_box(phys_w: int, phys_h: int, off_x: int, off_y: int, page_w: int, page
     return (x0, y0, x0 + w, y0 + h)
 
 
+def parse_lpstat_printers(text: str) -> list[str]:
+    """`lpstat -p` 출력에서 프린터 이름을 순서대로 뽑는다."""
+    names = []
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "printer":
+            names.append(parts[1])
+    return names
+
+
+def parse_lpstat_default(text: str) -> str | None:
+    """`lpstat -d` 출력에서 기본 프린터 이름. 없으면 None."""
+    prefix = "system default destination:"
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            name = line[len(prefix):].strip()
+            return name or None
+    return None
+
+
+# ----- 플랫폼 진입점 -----
+
+
 def list_printers() -> tuple[list[str], str | None]:
     """(설치된 프린터 이름 목록, 기본 프린터 이름 또는 None)."""
+    if sys.platform.startswith("win"):
+        return _win32_list_printers()
+    return _cups_list_printers()
+
+
+def print_pages(
+    pages: list[Image.Image], printer_name: str, job_name: str, output_file: str | None = None
+) -> None:
+    """페이지 이미지들을 한 인쇄 작업으로 보낸다. 실패하면 예외를 그대로 올린다.
+
+    output_file은 Windows 전용: 파일 출력 드라이버(예: Microsoft Print to PDF)가
+    대화상자 없이 그 경로에 쓴다(검증용).
+    """
+    if sys.platform.startswith("win"):
+        _win32_print_pages(pages, printer_name, job_name, output_file)
+    else:
+        _cups_print_pages(pages, printer_name, job_name)
+
+
+# ----- Windows (pywin32) -----
+
+
+def _win32_list_printers() -> tuple[list[str], str | None]:
     import win32print
 
     flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
@@ -36,13 +93,9 @@ def list_printers() -> tuple[list[str], str | None]:
     return names, default
 
 
-def print_pages(
-    pages: list[Image.Image], printer_name: str, job_name: str, output_file: str | None = None
+def _win32_print_pages(
+    pages: list[Image.Image], printer_name: str, job_name: str, output_file: str | None
 ) -> None:
-    """페이지 이미지들을 한 인쇄 작업으로 보낸다. 실패하면 예외를 그대로 올린다.
-
-    output_file을 주면 파일 출력 드라이버(예: Microsoft Print to PDF)가 대화상자 없이 그 경로에 쓴다.
-    """
     import win32con
     import win32ui
     from PIL import ImageWin
@@ -66,3 +119,42 @@ def print_pages(
             dc.EndDoc()
     finally:
         dc.DeleteDC()
+
+
+# ----- macOS / Linux (CUPS) -----
+
+
+def _run(cmd: list[str]) -> str:
+    return subprocess.run(cmd, capture_output=True, text=True, check=False).stdout
+
+
+def _cups_list_printers() -> tuple[list[str], str | None]:
+    try:
+        names = parse_lpstat_printers(_run(["lpstat", "-p"]))
+        default = parse_lpstat_default(_run(["lpstat", "-d"]))
+    except FileNotFoundError:
+        return [], None
+    if default and default not in names:
+        names.insert(0, default)
+    return names, default
+
+
+def _cups_print_pages(pages: list[Image.Image], printer_name: str, job_name: str) -> None:
+    """페이지를 임시 PDF로 저장해 lpr로 보낸다. PDF는 이미 A4라 용지만 A4로 지정한다."""
+    from pdf_writer import save_pages
+
+    fd, path = tempfile.mkstemp(prefix="printimg-", suffix=".pdf")
+    os.close(fd)
+    try:
+        save_pages(pages, path)
+        subprocess.run(
+            ["lpr", "-P", printer_name, "-T", job_name, "-o", "media=A4", "-o", "fit-to-page", path],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass

@@ -26,9 +26,8 @@ def render_pages(image: Image.Image, plan: Plan) -> list[Image.Image]:
     return pages
 
 
-def write(image: Image.Image, plan: Plan, out_path: str | os.PathLike) -> int:
-    """PDF를 저장하고 페이지 수를 돌려준다. 파일 오류는 호출자가 처리한다."""
-    pages = render_pages(image, plan)
+def save_pages(pages: list[Image.Image], out_path: str | os.PathLike) -> int:
+    """렌더링된 페이지들을 다중 페이지 PDF로 저장하고 페이지 수를 돌려준다."""
     pages[0].save(
         out_path,
         "PDF",
@@ -38,3 +37,8 @@ def write(image: Image.Image, plan: Plan, out_path: str | os.PathLike) -> int:
         quality=JPEG_QUALITY,
     )
     return len(pages)
+
+
+def write(image: Image.Image, plan: Plan, out_path: str | os.PathLike) -> int:
+    """PDF를 저장하고 페이지 수를 돌려준다. 파일 오류는 호출자가 처리한다."""
+    return save_pages(render_pages(image, plan), out_path)

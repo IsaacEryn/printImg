@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PIL import Image, UnidentifiedImageError  # noqa: E402
 
 from background import apply_background, detect_background, is_white  # noqa: E402
+from desktop import open_file  # noqa: E402
 from image_loader import SUPPORTED_EXTENSIONS, load_image  # noqa: E402
 from paginate import Options, Plan, plan, smart_cut_count  # noqa: E402
 from pdf_writer import render_pages, write  # noqa: E402
@@ -79,10 +80,14 @@ class App(tk.Tk):
             bg_row, textvariable=self.bg_mode, values=list(BG_MODES), width=6, state="readonly"
         )
         self.bg_mode_box.pack(side="left", padx=(6, 0))
-        self.bg_button = tk.Button(
-            bg_row, text="#ffffff", width=8, relief="groove", command=self.pick_bg_color
+        # 색 견본은 Canvas로 그린다. tk.Button의 bg는 맥 Aqua에서 무시된다.
+        self.bg_swatch = tk.Canvas(
+            bg_row, width=22, height=22, highlightthickness=1, highlightbackground="#888"
         )
-        self.bg_button.pack(side="left", padx=(6, 0))
+        self.bg_swatch.pack(side="left", padx=(6, 0))
+        self.bg_swatch.bind("<Button-1>", lambda e: self.pick_bg_color())
+        self.bg_button = ttk.Button(bg_row, text="#ffffff", width=9, command=self.pick_bg_color)
+        self.bg_button.pack(side="left", padx=(4, 0))
         self._sync_bg_widgets()
 
         ttk.Label(frame, text="여백 (mm)").grid(row=4, column=0, sticky="w", pady=(8, 0))
@@ -261,18 +266,15 @@ class App(tk.Tk):
         state = "readonly" if self.bg_on.get() else "disabled"
         self.bg_mode_box.config(state=state)
         self.bg_button.config(state="normal" if self.bg_on.get() else "disabled")
+        self.bg_swatch.config(state="normal" if self.bg_on.get() else "disabled")
 
     def _show_bg_color(self) -> None:
         if self.bg_color is None:
-            self.bg_button.config(text="감지 실패", bg="SystemButtonFace", fg="black")
+            self.bg_button.config(text="감지 실패")
+            self.bg_swatch.config(bg=self.cget("bg"))
             return
-        r, g, b = self.bg_color
-        luma = 0.299 * r + 0.587 * g + 0.114 * b
-        self.bg_button.config(
-            text=to_hex(self.bg_color),
-            bg=to_hex(self.bg_color),
-            fg="black" if luma > 128 else "white",
-        )
+        self.bg_button.config(text=to_hex(self.bg_color))
+        self.bg_swatch.config(bg=to_hex(self.bg_color))
 
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
@@ -285,7 +287,7 @@ class App(tk.Tk):
 
     def _open_pdf(self, out_path: Path) -> None:
         try:
-            os.startfile(out_path)  # type: ignore[attr-defined]  # Windows 전용
+            open_file(out_path)
         except OSError:
             messagebox.showinfo(APP_TITLE, f"PDF를 저장했습니다.\n{out_path}")
 
