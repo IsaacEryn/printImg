@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from collections.abc import Callable
 from tkinter import ttk
@@ -11,6 +12,16 @@ from PIL import Image, ImageTk
 THUMB_WIDTH = 420      # 썸네일 폭 (px)
 VISIBLE_HEIGHT = 640   # 스크롤 영역 높이 (px)
 GAP = 16
+
+
+def wheel_steps(delta: int, platform: str = sys.platform) -> int:
+    """<MouseWheel> delta를 yview_scroll 단위 수로 바꾼다.
+
+    Windows는 한 칸에 ±120, 맥은 ±1(트랙패드 가속 시 더 큼)이라 맥에서 120으로 나누면 항상 0이 된다.
+    """
+    if platform == "darwin":
+        return -delta
+    return -int(delta / 120)
 
 
 class PreviewWindow(tk.Toplevel):
@@ -61,7 +72,10 @@ class PreviewWindow(tk.Toplevel):
             )
             y += thumb_h + 24 + GAP
         canvas.configure(scrollregion=(0, 0, THUMB_WIDTH + 2 * GAP, y))
-        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-int(e.delta / 120), "units"))
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(wheel_steps(e.delta), "units"))
+        # X11(리눅스)은 휠이 버튼 4/5로 온다.
+        canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
         bottom = ttk.Frame(outer)
         bottom.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))

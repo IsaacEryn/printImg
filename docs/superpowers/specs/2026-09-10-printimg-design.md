@@ -199,4 +199,9 @@ GUI: `☐ 빈 줄에 맞춰 자르기`, `☐ 배경색 [제거|흐리게] [#eeed
 
 GUI의 배경색 견본은 `tk.Button(bg=…)` 대신 `Canvas` 사각형 + `ttk.Button`(hex 표시)으로 바꿨다. 맥 Aqua는 버튼 배경색을 무시하고 `SystemButtonFace` 색 이름도 없다.
 
-의존성: `pywin32; sys_platform == "win32"`. 빌드: `PrintImg-mac.spec`(BUNDLE → `dist/PrintImg.app`) + `scripts/build.sh`. 맥 빌드와 실제 인쇄 확인은 맥에서만 가능하다 (README 체크리스트).
+의존성: `pywin32; sys_platform == "win32"`. 빌드: `PrintImg-mac.spec`(onedir COLLECT → BUNDLE → `dist/PrintImg.app`) + `scripts/build.sh`(Tk가 있는 Python 3.12+를 찾아 `.venv`에서 빌드). 맥 빌드와 실제 인쇄 확인은 맥에서만 가능하다 (README 체크리스트).
+
+맥에서 확인하며 고친 것 (2026-09-10, macOS 26.6, Python 3.13 + Tk 9.0):
+- `preview.py`: `<MouseWheel>` delta가 맥에서는 ±1 단위라 `/120`으로 나누면 0이 되어 스크롤이 안 됐다. `wheel_steps(delta, platform)`으로 분리하고 테스트.
+- `main.py`: Finder(LaunchServices)로 실행하면 첫 그리기가 안 돼 포커스가 바뀔 때까지 빈 창이었다. 맥에서만 시작 100 ms 뒤 `withdraw()`/`deiconify()`로 다시 매핑.
+- 인쇄 경로 검증은 실제 프린터 대신 macOS 내장 `ippeveprinter`로 만든 가상 IPP 프린터에 `lpadmin -m everywhere`로 등록해 진행했다. 도착한 PDF가 A4 3페이지였다.

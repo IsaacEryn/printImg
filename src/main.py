@@ -293,7 +293,12 @@ class App(tk.Tk):
 
 
 def main() -> None:
-    App().mainloop()
+    app = App()
+    if sys.platform == "darwin":
+        # Finder(LaunchServices)로 실행하면 첫 그리기가 안 돼 포커스가 바뀔 때까지 빈 창으로 남는다
+        # (Tk 9.0, macOS 26에서 확인). 매핑을 한 번 다시 해 강제로 그린다. 터미널 실행에는 영향 없다.
+        app.after(100, lambda: (app.withdraw(), app.deiconify()))
+    app.mainloop()
 
 
 if __name__ == "__main__":

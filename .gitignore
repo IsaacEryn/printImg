@@ -6,3 +6,4 @@ dist/
 _data/
 *.pdf
 .superpowers/
+.venv/

@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 # macOS 빌드용. 맥에서 `scripts/build.sh`로 실행한다. 결과: dist/PrintImg.app
+# .app 번들은 onedir로 만든다. onefile + BUNDLE 조합은 PyInstaller 6에서 deprecated이고
+# (7에서 오류), 부트로더와 실제 앱이 두 프로세스로 떠서 실행마다 임시 폴더에 풀어야 한다.
 
 a = Analysis(
     ['src/main.py'],
@@ -19,9 +21,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name='PrintImg',
     debug=False,
     bootloader_ignore_signals=False,
@@ -35,8 +36,17 @@ exe = EXE(
     entitlements_file=None,
 )
 
-app = BUNDLE(
+coll = COLLECT(
     exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name='PrintImg',
+)
+
+app = BUNDLE(
+    coll,
     name='PrintImg.app',
     icon=None,
     bundle_identifier='com.codeslog.printimg',
