@@ -29,10 +29,12 @@
 printImg/
 ├── src/
 │   ├── main.py        # Tkinter GUI, 진입점
+│   ├── image_loader.py # 파일 열기, EXIF 회전, 투명도 합성, RGB 통일
 │   ├── paginate.py    # 순수 로직: 배율 계산 + 분할 위치 결정
 │   └── pdf_writer.py  # 조각을 A4 캔버스에 얹어 PDF 저장
 ├── tests/
 │   ├── test_paginate.py
+│   ├── test_image_loader.py
 │   └── test_pdf_writer.py
 ├── docs/superpowers/specs/
 ├── requirements.txt   # Pillow
@@ -46,12 +48,13 @@ printImg/
 |---|---|---|---|
 | `paginate` | 이미지 크기, 옵션, (빈 줄 탐지용) 이미지 객체 | `Plan` (배율, 가로 오프셋, 구간 목록) | Tkinter, 파일 I/O |
 | `pdf_writer` | 이미지, `Plan`, 출력 경로 | PDF 파일 | 분할 규칙 |
-| `main` | 사용자 조작 | 위 둘의 호출 | 계산 세부 |
+| `image_loader` | 파일 경로 | RGB 이미지 (EXIF 회전 적용, 투명도 흰 배경 합성) | 분할 규칙, GUI |
+| `main` | 사용자 조작 | 위 셋의 호출 | 계산 세부 |
 
 ### 데이터 흐름
 
 1. `main`이 파일 대화상자로 경로를 받고 옵션을 읽는다.
-2. 이미지를 로드하고 전처리한다 (EXIF 회전 적용 → RGBA는 흰 배경에 합성 → RGB 통일).
+2. `image_loader.load_image(path)`가 이미지를 로드하고 전처리한다 (EXIF 회전 적용 → RGBA는 흰 배경에 합성 → RGB 통일).
 3. `paginate.plan(image, options)`가 `Plan`을 돌려준다.
 4. `pdf_writer.write(image, plan, out_path)`가 PDF를 저장한다.
 5. `main`이 `os.startfile(out_path)`로 PDF를 연다.
