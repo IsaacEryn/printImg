@@ -12,11 +12,9 @@ Made by [Isaac](https://www.codeslog.com) · MIT License
 
 설치 없이 쓰려면 HTML 버전, 자주 쓰면 앱 버전이 편합니다.
 
-- **브라우저 (설치 없음)**: `printImg.html` 한 파일을 내려받아 더블클릭하면 됩니다. 이미지를 고르고 미리보기를 확인한 뒤 인쇄(Ctrl+P, 맥은 ⌘+P)합니다. 인쇄 대화상자에서 "PDF로 저장"을 고르면 파일로도 남습니다.
-- **Windows**: Releases에서 `PrintImg-<버전>-win.exe`를 내려받아 실행합니다. 설치 과정은 없습니다.
-- **macOS (Apple Silicon)**: Releases에서 `PrintImg-<버전>-mac-arm64.zip`을 내려받아 풀고 `PrintImg.app`을 실행합니다. Intel 맥용 빌드는 아직 없습니다.
-
-Releases 링크는 저장소 오른쪽 "Releases" 항목에 있습니다.
+- **브라우저 (설치 없음)**: **https://isaaceryn.github.io/printImg/printImg.html** 을 열면 바로 씁니다. 오프라인으로 쓰려면 `printImg.html` 한 파일을 내려받아 더블클릭하면 됩니다. 이미지를 고르고 미리보기를 확인한 뒤 인쇄(Ctrl+P, 맥은 ⌘+P)합니다. 인쇄 대화상자에서 "PDF로 저장"을 고르면 파일로도 남습니다.
+- **Windows**: [Releases](https://github.com/IsaacEryn/printImg/releases)에서 `PrintImg-<버전>-win.exe`를 내려받아 실행합니다. 설치 과정은 없습니다.
+- **macOS (Apple Silicon)**: [Releases](https://github.com/IsaacEryn/printImg/releases)에서 `PrintImg-<버전>-mac-arm64.zip`을 내려받아 풀고 `PrintImg.app`을 실행합니다. Intel 맥용 빌드는 아직 없습니다.
 
 처음 실행할 때 뜨는 경고는 개발자 서명을 사지 않아서 그렇습니다. 코드는 이 저장소에 전부 공개되어 있습니다.
 
@@ -124,7 +122,7 @@ lpadmin -p PrintImgTest -E -v ipp://localhost:8632/ipp/print -m everywhere
 1. 버전을 올린다: `version_info.txt`(4곳), `PrintImg-mac.spec`의 `CFBundleShortVersionString`, `CHANGELOG.md`.
 2. Windows에서 `scripts\build.bat` 후 `dist\PrintImg.exe`를 `PrintImg-<버전>-win.exe`로 이름을 바꾼다. 맥에서 `scripts/build.sh` → `ditto`로 zip.
 3. `git tag v<버전>` 후 GitHub Releases에 `PrintImg-<버전>-win.exe`, `PrintImg-<버전>-mac-arm64.zip`, `printImg.html`을 올린다.
-4. HTML 버전은 GitHub Pages(main, /root)를 켜면 `https://<계정>.github.io/<저장소>/printImg.html`로 바로 쓸 수 있다.
+4. HTML 버전은 GitHub Pages(main, /root)로 https://isaaceryn.github.io/printImg/printImg.html 에 자동 배포된다.
 
 ## 알려진 한계
 
