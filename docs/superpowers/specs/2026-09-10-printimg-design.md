@@ -31,6 +31,7 @@ printImg/
 │   ├── main.py        # Tkinter GUI, 진입점
 │   ├── image_loader.py # 파일 열기, EXIF 회전, 투명도 합성, RGB 통일
 │   ├── paginate.py    # 순수 로직: 배율 계산 + 분할 위치 결정
+│   ├── background.py  # 배경색 감지, 제거·흐리게 (Pillow만 사용)
 │   └── pdf_writer.py  # 조각을 A4 캔버스에 얹어 PDF 저장
 ├── tests/
 │   ├── test_paginate.py
@@ -160,3 +161,14 @@ pytest. 테스트 이미지는 파일 없이 Pillow로 코드 안에서 생성�
 - 차트 중간이 아닌 카드 사이 여백에서 잘렸는지 확인
 - 덮어쓰기 확인창, 열린 PDF 쓰기 실패 메시지
 - exe 빌드 후 Python 없는 환경에서 실행
+
+## 10. 배경색 처리와 분할 토글 (2026-09-10 추가, 웹 버전 printImg.html에서 이식)
+
+`src/background.py`
+- `detect_background(image)`: 폭 200으로 축소(BOX) → 가장자리 2% 띠의 픽셀을 채널당 8단계(5비트)로 묶어 최빈 묶음을 찾고 그 묶음의 평균색을 배경색으로 본다. 띠에서 최빈 비중이 30% 미만이면 이미지 전체 최빈색으로 폴백. 파일 선택 직후 한 번 실행하고, 사용자가 색상 버튼으로 고칠 수 있다.
+- `apply_background(image, bg, mode)`: 배경색과 채널당 차이 16 이하인 픽셀을 마스크로 잡아 `remove`는 흰색, `fade`는 `faded_color(bg)`(흰색과의 차이를 15%만 남기되 최소 10)로 칠한 새 이미지. 배경이 이미 흰색(채널당 차이 3 이하)이면 원본 복사본을 돌려준다. 웹 버전은 픽셀마다 계산하지만 허용 범위 안에서는 결과가 거의 같아 단색으로 단순화했다.
+- 처리 순서: 배경 처리 → `plan` → `write`. 배경을 먼저 지워야 빈 줄 판정도 깨끗하다.
+
+`paginate.Options.smart_split`(기본 True): 꺼지면 빈 줄 탐색 없이 등분. `smart_cut_count(image, plan)`은 분할 위치 중 빈 줄에 놓인 수.
+
+GUI: `☐ 빈 줄에 맞춰 자르기`, `☐ 배경색 [제거|흐리게] [#eeedfc]`(체크 해제 시 비활성). 상태줄 예: `3페이지 생성 (배경 #eeedfc 제거, 빈 줄 컷 2/2) → foo.pdf`.
