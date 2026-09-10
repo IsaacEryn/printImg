@@ -21,6 +21,7 @@ APP_TITLE = "PrintImg"
 MARGIN_MIN = 0
 MARGIN_MAX = 30
 MARGIN_DEFAULT = 10
+MAX_PAGES = 50
 
 
 class App(tk.Tk):
@@ -40,7 +41,7 @@ class App(tk.Tk):
         ttk.Button(frame, text="이미지 선택…", command=self.choose_file).grid(
             row=0, column=0, sticky="w"
         )
-        self.file_label = ttk.Label(frame, text="선택된 파일 없음", width=48)
+        self.file_label = ttk.Label(frame, text="선택된 파일 없음", wraplength=360)
         self.file_label.grid(row=0, column=1, padx=(8, 0), sticky="w")
 
         ttk.Checkbutton(frame, text="원본 크기 유지", variable=self.keep_actual).grid(
@@ -98,37 +99,47 @@ class App(tk.Tk):
         ):
             return
 
+        options = Options(keep_actual_size=self.keep_actual.get(), margin_mm=margin_mm)
+
         self._set_busy(True)
+        result = self._build_pdf(out_path, options)
+        self._set_busy(False)
+
+        if isinstance(result, str):
+            messagebox.showerror(APP_TITLE, result)
+            return
+
+        page_count = result
+        self.status.config(text=f"{page_count}페이지 생성 → {out_path.name}")
+        self._open_pdf(out_path)
+
+    def _build_pdf(self, out_path: Path, options: Options) -> int | str:
+        """이미지를 불러와 PDF를 저장한다.
+
+        성공하면 페이지 수를, 실패하면 사용자에게 보여줄 오류 메시지를 돌려준다.
+        메시지 박스는 호출자(make_pdf)가 busy 상태를 끈 뒤에 띄운다.
+        """
         try:
             try:
                 image = load_image(self.image_path)
             except Image.DecompressionBombError:
-                messagebox.showerror(APP_TITLE, "이미지가 너무 큽니다.")
-                return
+                return "이미지가 너무 큽니다."
             except (UnidentifiedImageError, OSError):
-                messagebox.showerror(
-                    APP_TITLE, f"이미지를 열 수 없습니다.\n{self.image_path.name}"
-                )
-                return
+                return f"이미지를 열 수 없습니다.\n{self.image_path.name}"
 
-            options = Options(keep_actual_size=self.keep_actual.get(), margin_mm=margin_mm)
+            p = plan(image, options)
+            if len(p.slices) > MAX_PAGES:
+                return f"페이지가 너무 많습니다 ({len(p.slices)}페이지, 최대 {MAX_PAGES}페이지)."
+
             try:
-                page_count = write(image, plan(image, options), out_path)
+                return write(image, p, out_path)
             except PermissionError:
-                messagebox.showerror(
-                    APP_TITLE, f"{out_path.name} 파일이 열려 있습니다. 닫고 다시 시도하세요."
-                )
-                return
+                return f"{out_path.name} 파일이 열려 있습니다. 닫고 다시 시도하세요."
             except OSError as e:
-                messagebox.showerror(
-                    APP_TITLE, f"PDF를 저장할 수 없습니다.\n{out_path.name}\n{e}"
-                )
-                return
-        finally:
-            self._set_busy(False)
-
-        self.status.config(text=f"{page_count}페이지 생성 → {out_path.name}")
-        self._open_pdf(out_path)
+                return f"PDF를 저장할 수 없습니다.\n{out_path.name}\n{e}"
+        except Exception as e:
+            # console=False 빌드에서는 이 오류가 아무 곳에도 안 보이므로 반드시 메시지로 표시한다.
+            return f"PDF를 만들 수 없습니다.\n{type(e).__name__}: {e}"
 
     # ----- 내부 도우미 -----
 
