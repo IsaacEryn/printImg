@@ -12,7 +12,7 @@ Made by [Isaac](https://www.codeslog.com) · MIT License
 
 설치 없이 쓰려면 HTML 버전, 자주 쓰면 앱 버전이 편합니다.
 
-- **브라우저 (설치 없음)**: **https://isaaceryn.github.io/printImg/printImg.html** 을 열면 바로 씁니다. 오프라인으로 쓰려면 `printImg.html` 한 파일을 내려받아 더블클릭하면 됩니다. 이미지를 고르고 미리보기를 확인한 뒤 인쇄(Ctrl+P, 맥은 ⌘+P)합니다. 인쇄 대화상자에서 "PDF로 저장"을 고르면 파일로도 남습니다.
+- **브라우저 (설치 없음)**: **https://isaaceryn.github.io/printImg/printImg.html** 을 열면 바로 씁니다. 오프라인으로 쓰려면 `printImg.html` 한 파일을 내려받아 더블클릭하면 됩니다. 캡처 확장에서 "클립보드로 복사"를 고른 뒤 이 페이지에서 Ctrl+V(맥은 ⌘+V)를 누르면 파일을 저장하지 않고도 바로 넣을 수 있습니다. 이미지를 고르고 미리보기를 확인한 뒤 인쇄(Ctrl+P, 맥은 ⌘+P)합니다. 인쇄 대화상자에서 "PDF로 저장"을 고르면 파일로도 남습니다.
 - **Windows**: [Releases](https://github.com/IsaacEryn/printImg/releases)에서 `PrintImg-<버전>-win.exe`를 내려받아 실행합니다. 설치 과정은 없습니다.
 - **macOS (Apple Silicon)**: [Releases](https://github.com/IsaacEryn/printImg/releases)에서 `PrintImg-<버전>-mac-arm64.zip`을 내려받아 풀고 `PrintImg.app`을 실행합니다. Intel 맥용 빌드는 아직 없습니다.
 
@@ -39,7 +39,7 @@ Made by [Isaac](https://www.codeslog.com) · MIT License
 
 ## HTML 버전
 
-`printImg.html`은 같은 분할·배경 알고리즘을 브라우저에서 돌립니다. 이미지는 브라우저 안에서만 처리되고 어디로도 전송되지 않습니다. 앱과 다른 점:
+`printImg.html`은 같은 분할·배경 알고리즘을 브라우저에서 돌립니다. 이미지는 브라우저 안에서만 처리되고 어디로도 전송되지 않습니다. 이미지는 파일 선택 외에 클립보드 붙여넣기(Ctrl+V / ⌘+V)와 창에 끌어다 놓기로도 넣을 수 있습니다. 구글 폼 응답 페이지처럼 로그인이 필요한 화면은 전체 페이지 캡처 확장으로 "클립보드에 복사"한 뒤 붙여 넣는 흐름이 가장 짧습니다. 앱과 다른 점:
 
 | | 앱 (Windows·macOS) | HTML |
 |---|---|---|

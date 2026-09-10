@@ -427,15 +427,13 @@ document.addEventListener('DOMContentLoaded', function () {
 		renderTimer = setTimeout(render, RENDER_DELAY_MS);
 	}
 
-	fileInput.addEventListener('change', () => {
-		const file = fileInput.files[0];
-		fileInput.value = ''; // 같은 파일을 다시 골라도 change가 나도록 비움
-		if (!file) return;
-
+	// File 객체 하나를 읽어 미리보기까지 그린다. 파일 선택·붙여넣기·끌어놓기가 모두 이 함수를 쓴다.
+	// name은 화면·문서 제목에 쓸 이름 (붙여넣기는 브라우저가 "image.png"로 주므로 따로 받는다).
+	function loadFile(file, name) {
 		const seq = ++loadSeq;
 		const url = URL.createObjectURL(file);
-		fileName = file.name;
-		fileInfo.textContent = `${file.name} · 불러오는 중…`;
+		fileName = name;
+		fileInfo.textContent = `${name} · 불러오는 중…`;
 		errorEl.textContent = '';
 
 		const im = new Image();
@@ -446,8 +444,8 @@ document.addEventListener('DOMContentLoaded', function () {
 			bgColor = detectBackground(im);
 			bgManual = false;
 			if (bgColor) bgPick.value = toHex(bgColor);
-			fileInfo.textContent = `${file.name} · ${im.naturalWidth} × ${im.naturalHeight} px`;
-			document.title = `${file.name.replace(/\.[^.]+$/, '')} — PrintImg`; // "PDF로 저장" 기본 파일명
+			fileInfo.textContent = `${name} · ${im.naturalWidth} × ${im.naturalHeight} px`;
+			document.title = `${name.replace(/\.[^.]+$/, '')} — PrintImg`; // "PDF로 저장" 기본 파일명
 			render();
 		};
 		im.onerror = () => {
@@ -456,11 +454,42 @@ document.addEventListener('DOMContentLoaded', function () {
 			img = null;
 			pagesEl.replaceChildren();
 			printBtn.disabled = true;
-			fileInfo.textContent = file.name;
+			fileInfo.textContent = name;
 			status.textContent = '';
-			errorEl.textContent = `이미지를 열 수 없습니다: ${file.name}`;
+			errorEl.textContent = `이미지를 열 수 없습니다: ${name}`;
 		};
 		im.src = url;
+	}
+
+	fileInput.addEventListener('change', () => {
+		const file = fileInput.files[0];
+		fileInput.value = ''; // 같은 파일을 다시 골라도 change가 나도록 비움
+		if (file) loadFile(file, file.name);
+	});
+
+	// 클립보드·끌어놓기에서 이미지 파일 하나를 고른다. 없으면 null.
+	function imageFileFrom(dataTransfer) {
+		if (!dataTransfer) return null;
+		return [...dataTransfer.files].find(f => f.type.startsWith('image/')) || null;
+	}
+	function stampName(prefix) {
+		const d = new Date(), z = n => String(n).padStart(2, '0');
+		return `${prefix} ${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}-${z(d.getMinutes())}`;
+	}
+	// 복사한 이미지를 Ctrl+V / ⌘+V로 붙여넣기. 이미지가 없으면 손대지 않아 입력칸의 글자 붙여넣기는 그대로다.
+	document.addEventListener('paste', e => {
+		const file = imageFileFrom(e.clipboardData);
+		if (!file) return;
+		e.preventDefault();
+		loadFile(file, stampName('붙여넣기'));
+	});
+	// 이미지 파일을 창 어디에나 끌어다 놓기
+	document.addEventListener('dragover', e => { if (imageFileFrom(e.dataTransfer) || [...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); });
+	document.addEventListener('drop', e => {
+		const file = imageFileFrom(e.dataTransfer);
+		if (!file) return;
+		e.preventDefault();
+		loadFile(file, file.name);
 	});
 
 	keepBox.addEventListener('change', render);
@@ -486,6 +515,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			<label for="file" class="hint" style="margin:0 0 6px">PNG, JPG, BMP, GIF, WEBP</label>
 			<input type="file" id="file" accept="image/png,image/jpeg,image/bmp,image/gif,image/webp">
 			<p id="fileInfo" aria-live="polite">선택된 파일 없음</p>
+			<p class="hint">복사한 이미지를 <kbd>Ctrl</kbd>+<kbd>V</kbd>(맥은 <kbd>⌘</kbd>+<kbd>V</kbd>)로 붙여 넣거나, 파일을 창에 끌어다 놓아도 됩니다.</p>
 		</section>
 
 		<fieldset>
