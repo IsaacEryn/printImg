@@ -7,6 +7,7 @@ from pdf_writer import render_pages, write
 
 RED = (255, 0, 0)
 WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
 
 
 def _plan(scale, x_offset, margin_px, slices):
@@ -67,3 +68,31 @@ def test_write_creates_multipage_a4_pdf(tmp_path):
     assert data.startswith(b"%PDF")
     assert len(re.findall(rb"/Type\s*/Page\b(?!s)", data)) == 3
     assert re.search(rb"/MediaBox\s*\[\s*0\s+0\s+595\.2\s+841\.92\s*\]", data)
+
+
+def test_write_uses_higher_jpeg_quality_than_pillow_default(tmp_path):
+    # 흑백 1px 세로 줄무늬: 300 DPI 텍스트처럼 고주파 콘텐츠라 품질 설정 차이가 뚜렷하게 드러난다.
+    im = Image.new("RGB", (71, 250))
+    px = im.load()
+    for x in range(71):
+        color = BLACK if x % 2 == 0 else WHITE
+        for y in range(250):
+            px[x, y] = color
+
+    test_plan = _plan(1.0, 0, 118, [(0, 100), (100, 250)])
+
+    out = tmp_path / "quality95.pdf"
+    write(im, test_plan, out)
+
+    # write()와 동일한 페이지를 만들되 quality를 지정하지 않은 Pillow 기본값(75)과 비교한다.
+    pages = render_pages(im, test_plan)
+    baseline = tmp_path / "baseline_default_quality.pdf"
+    pages[0].save(
+        baseline,
+        "PDF",
+        resolution=300.0,
+        save_all=True,
+        append_images=pages[1:],
+    )
+
+    assert out.stat().st_size > baseline.stat().st_size
