@@ -1,10 +1,10 @@
 # PrintImg
 
-세로로 긴 이미지(주로 긴 화면 캡처)를 A4 여러 장으로 나눠 PDF로 만들거나 바로 인쇄합니다. 페이지 경계는 차트나 카드 중간이 아니라 빈 줄에서 자릅니다.
+세로로 긴 이미지(주로 긴 화면 캡처)를 A4 여러 장으로 나눠 PDF로 만들거나 바로 인쇄합니다. 페이지 경계는 되도록 차트나 카드 중간이 아니라 빈 줄에서 자릅니다.
 
 Made by [Isaac](https://www.codeslog.com) · MIT License
 
-**English:** PrintImg splits a tall image (typically a long screenshot) into A4 pages and saves a PDF or prints it directly. It fits the image to the printable width, cuts between pages at blank rows so charts and cards stay intact, and can strip or fade a detected background color. Everything runs locally; nothing is uploaded. Three flavors share the same splitting and background-detection algorithm; defaults and limits differ slightly (see the table below): a single-file browser version (`printImg.html`, no install), a Windows executable, and a macOS app. Built by [Isaac](https://www.codeslog.com).
+**English:** PrintImg splits a tall image (typically a long screenshot) into A4 pages and saves a PDF or prints it directly. It fits the image to the printable width, cuts between pages at blank rows where possible so charts and cards are less likely to be split, and can strip or fade a detected background color. Everything runs locally; nothing is uploaded. Three flavors share the same splitting and background-detection algorithm; defaults and limits differ slightly (see the table below): a single-file browser version (`printImg.html`, no install), a Windows executable, and a macOS app. Built by [Isaac](https://www.codeslog.com).
 
 ![긴 캡처 한 장이 A4 세 장으로 나뉜 결과. 경계가 카드 사이 여백에 있다](docs/img/result-pages.png)
 
@@ -28,7 +28,7 @@ Releases 링크는 저장소 오른쪽 "Releases" 항목에 있습니다.
 아래는 Windows·macOS 앱 기준입니다. HTML 버전과의 차이는 다음 절에 있습니다.
 
 - 이미지 폭을 인쇄 가능 영역에 100% 맞춥니다. 작으면 확대, 크면 축소.
-- "원본 크기 유지"를 켜면 96 DPI 기준 실제 크기로 출력합니다. 폭이 인쇄 영역보다 넓으면 폭 맞춤으로 자동 전환되므로, 여백 5 mm에서 폭 750 px을 넘는 이미지(대부분의 화면 캡처)는 이 옵션을 켜도 폭 맞춤으로 나옵니다.
+- "원본 크기 유지"를 켜면 96 DPI 기준 실제 크기로 출력합니다. 폭이 인쇄 영역보다 넓으면 폭 맞춤으로 자동 전환되므로, 여백 5 mm에서 폭 약 755 px을 넘는 이미지(대부분의 화면 캡처)는 이 옵션을 켜도 폭 맞춤으로 나옵니다.
 - 한 페이지를 넘는 높이는 여러 페이지로 나눕니다. 페이지 경계 근처(위쪽 30% 이내)의 빈 줄에서 자르고, 없으면 등분합니다. 끝이 여백뿐인 페이지는 만들지 않습니다.
 - "빈 줄에 맞춰 자르기"를 끄면 빈 줄 탐색 없이 등분합니다. 상태줄에 빈 줄에서 잘린 횟수가 표시됩니다.
 - "배경색"을 켜면 자동 감지된 배경색(가장자리 최빈색)을 제거(흰색) 또는 흐리게 처리합니다. 색상 버튼으로 직접 고를 수 있습니다. 어두운 배경에 흰 글자인 캡처에는 쓰지 마세요. 배경만 흰색이 되어 글자가 사라집니다.
@@ -50,7 +50,7 @@ Releases 링크는 저장소 오른쪽 "Releases" 항목에 있습니다.
 | 기본 여백 | 5 mm | 5 mm |
 | 원본 크기 유지 | 있음 | 있음 (같은 이름·기본 꺼짐) |
 | 배경 "흐리게" | 배경색을 단색으로 연하게 | 픽셀마다 계산 (결과는 거의 같음) |
-| 확인한 브라우저 | – | Chrome, Edge. Safari는 `@page` 여백·용지 크기를 무시해 머리글·바닥글이 찍힐 수 있습니다 |
+| 동작을 확인한 브라우저 | – | Chrome 152 (이 검토에서 실측). Edge는 같은 엔진. Safari는 `@page` 여백·용지 크기를 무시해 머리글·바닥글이 찍힐 수 있습니다 |
 
 인쇄 대화상자에서 여백은 기본값, 배율은 100%로 두세요. 바꾸면 페이지가 어긋납니다.
 
@@ -93,7 +93,7 @@ Windows exe (Windows에서):
 scripts\build.bat
 ```
 
-결과물 `dist\PrintImg.exe`. 서명이 없어 SmartScreen 경고가 뜹니다.
+`build.bat`은 `.venv`가 있으면 그 파이썬을, 없으면 전역 `python`을 씁니다. 결과물 `dist\PrintImg.exe`. 서명이 없어 SmartScreen 경고가 뜹니다.
 
 macOS .app (맥에서만. PyInstaller는 크로스 빌드를 지원하지 않습니다):
 
@@ -122,7 +122,7 @@ lpadmin -p PrintImgTest -E -v ipp://localhost:8632/ipp/print -m everywhere
 ## 릴리스 절차
 
 1. 버전을 올린다: `version_info.txt`(4곳), `PrintImg-mac.spec`의 `CFBundleShortVersionString`, `CHANGELOG.md`.
-2. Windows에서 `scripts\build.bat`, 맥에서 `scripts/build.sh` → `ditto`로 zip.
+2. Windows에서 `scripts\build.bat` 후 `dist\PrintImg.exe`를 `PrintImg-<버전>-win.exe`로 이름을 바꾼다. 맥에서 `scripts/build.sh` → `ditto`로 zip.
 3. `git tag v<버전>` 후 GitHub Releases에 `PrintImg-<버전>-win.exe`, `PrintImg-<버전>-mac-arm64.zip`, `printImg.html`을 올린다.
 4. HTML 버전은 GitHub Pages(main, /root)를 켜면 `https://<계정>.github.io/<저장소>/printImg.html`로 바로 쓸 수 있다.
 
@@ -130,7 +130,7 @@ lpadmin -p PrintImgTest -E -v ipp://localhost:8632/ipp/print -m everywhere
 
 - macOS 앱은 VoiceOver가 Tk 위젯을 읽지 못합니다(Tk 9.0의 한계, Tk 9.1의 접근성 API로 해결 예정). 스크린리더를 쓰면 HTML 버전을 쓰세요.
 - 확인창의 버튼이 시스템 언어에 따라 "Yes / No"로 나올 수 있습니다(Tk가 시스템 대화상자를 씀).
-- 인쇄 경로별 크기 정책이 다릅니다. Windows는 용지 전체에 100%로 붙이고(여백 0~3 mm면 프린터 인쇄 불가 영역에서 잘림), 맥 CUPS는 인쇄 가능 영역에 맞춰 3~4% 축소합니다. 여백을 5 mm 이상으로 두면 둘 다 잘리지 않습니다.
+- 인쇄 경로별 크기 정책이 다릅니다. Windows는 용지 전체에 100%로 붙이고(여백 0~3 mm면 프린터 인쇄 불가 영역에서 잘림), 맥 CUPS는 프린터의 인쇄 가능 영역에 맞춰 약 3~5% 축소합니다(기종에 따라 다름). 여백을 5 mm 이상으로 두면 둘 다 잘리지 않습니다.
 - Letter 용지 프린터는 확인하지 않았습니다. 맥 CUPS 경로는 A4를 강제합니다.
 
 ## 맥에서 확인한 것 (2026-09-10, macOS 26.6, Apple Silicon, Python 3.13 + Tk 9.0)

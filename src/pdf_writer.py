@@ -46,6 +46,10 @@ def save_pages(pages: list[Image.Image], out_path: str | os.PathLike) -> int:
             append_images=pages[1:],
             quality=JPEG_QUALITY,
         )
+        # mkstemp는 0600으로 만든다. 일반 파일처럼 umask를 적용한 권한으로 맞춘다.
+        umask = os.umask(0)
+        os.umask(umask)
+        os.chmod(tmp, 0o666 & ~umask)
         os.replace(tmp, out_path)
     finally:
         if os.path.exists(tmp):
