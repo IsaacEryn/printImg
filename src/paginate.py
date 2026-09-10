@@ -92,3 +92,37 @@ def split_rows(img_h: int, page_h: int, is_blank: Callable[[int], bool]) -> list
         y0 = cut
     slices.append((y0, img_h))
     return slices
+
+
+@dataclass(frozen=True)
+class Options:
+    keep_actual_size: bool = False
+    margin_mm: float = 10.0
+
+
+@dataclass(frozen=True)
+class Plan:
+    scale: float
+    x_offset: int
+    margin_px: int
+    usable_w: int
+    usable_h: int
+    slices: list[tuple[int, int]]
+
+
+def plan(image: Image.Image, options: Options) -> Plan:
+    """RGB 이미지와 옵션으로부터 배율·오프셋·분할 구간을 계산한다."""
+    img_w, img_h = image.size
+    layout = layout_for(options.margin_mm)
+    scale, x_offset = compute_scale(img_w, layout.usable_w, options.keep_actual_size)
+    page_h = page_height(scale, layout.usable_h)
+    gray = image.convert("L")
+    slices = split_rows(img_h, page_h, lambda y: is_blank_row(gray, y))
+    return Plan(
+        scale=scale,
+        x_offset=x_offset,
+        margin_px=layout.margin_px,
+        usable_w=layout.usable_w,
+        usable_h=layout.usable_h,
+        slices=slices,
+    )

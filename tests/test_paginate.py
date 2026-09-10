@@ -155,3 +155,36 @@ def test_slices_are_contiguous_and_cover_image():
 def test_rejects_non_positive_page_height():
     with pytest.raises(ValueError):
         split_rows(100, 0, never_blank)
+
+
+from paginate import Options, Plan, plan
+
+
+def test_options_defaults():
+    assert Options() == Options(keep_actual_size=False, margin_mm=10.0)
+
+
+def test_plan_end_to_end_cuts_at_blank_row():
+    # 폭 71, 여백 0 → scale = 2480/71, page_h = floor(3508*71/2480) = 100
+    # 단색 줄은 전부 빈 줄로 판정되므로, 세로 줄무늬로 "내용 있는 줄"을 만든다.
+    im = Image.new("RGB", (71, 250), "black")
+    for y in range(250):
+        for x in range(0, 71, 2):
+            im.putpixel((x, y), (255, 255, 255))
+    for x in range(71):
+        im.putpixel((x, 90), (255, 255, 255))  # 90번 줄만 전부 흰색 = 빈 줄
+    p = plan(im, Options(keep_actual_size=False, margin_mm=0))
+    assert isinstance(p, Plan)
+    assert p.margin_px == 0
+    assert (p.usable_w, p.usable_h) == (2480, 3508)
+    assert p.scale == pytest.approx(2480 / 71)
+    assert p.x_offset == 0
+    assert p.slices == [(0, 90), (90, 190), (190, 250)]
+
+
+def test_plan_actual_size_centers_narrow_image():
+    im = Image.new("RGB", (500, 10), "black")
+    p = plan(im, Options(keep_actual_size=True, margin_mm=10))
+    assert p.scale == pytest.approx(3.125)
+    assert p.x_offset == 341
+    assert p.slices == [(0, 10)]
