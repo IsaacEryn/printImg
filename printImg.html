@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="author" content="Isaac (https://www.codeslog.com)">
+<meta name="description" content="PrintImg — 세로로 긴 이미지를 A4 여러 장으로 나눠 인쇄. Split a tall image into A4 pages and print, all in the browser. By Isaac, codeslog.com">
 <title>PrintImg v3 (HTML)</title>
 <style>
 	/* 용지 여백은 0으로 고정한다. 브라우저 머리글·바닥글은 용지 여백에 그려지므로
@@ -69,6 +71,8 @@
 	.field input[type=color]:disabled { cursor: not-allowed; opacity: .5; }
 	input[type=file] { font: inherit; max-width: 100%; }
 	.hint { font-size: 13px; color: var(--muted); margin: 6px 0 0; }
+	.credit { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--line); }
+	.credit a { color: var(--accent); }
 	button {
 		font: inherit; font-weight: 600;
 		padding: 10px 16px; width: 100%;
@@ -507,6 +511,8 @@ document.addEventListener('DOMContentLoaded', function () {
 			<p id="error" role="alert"></p>
 			<p class="hint">인쇄 대화상자에서 여백은 <strong>기본값</strong>, 배율은 <strong>100%</strong>로 두세요. 바꾸면 페이지가 어긋납니다. 머리글·바닥글은 켜져 있어도 출력되지 않습니다.</p>
 		</section>
+
+		<footer class="hint credit">Made by <a href="https://www.codeslog.com" rel="author">Isaac</a> · <a href="https://www.codeslog.com">codeslog.com</a> · MIT License</footer>
 	</aside>
 
 	<main class="preview" aria-label="미리보기">

@@ -54,5 +54,6 @@ app = BUNDLE(
         'CFBundleDisplayName': 'PrintImg',
         'CFBundleShortVersionString': '1.1.0',
         'NSHighResolutionCapable': True,
+        'NSHumanReadableCopyright': '© 2026 Isaac · https://www.codeslog.com · MIT License',
     },
 )

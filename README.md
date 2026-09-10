@@ -2,6 +2,10 @@
 
 이미지 파일을 A4 세로 기준 다중 페이지 PDF로 만듭니다. 세로로 긴 화면 캡처를 종이로 뽑을 때 씁니다.
 
+Made by [Isaac](https://www.codeslog.com) · MIT License
+
+**English:** PrintImg turns a tall image (typically a long screenshot) into a multi-page A4 PDF, or prints it directly. It fits the image to the printable width, splits it across pages at blank rows so charts and cards are not cut in half, and can strip or fade a detected background color. Everything runs locally; nothing is uploaded. Three flavors share the same logic: a single-file browser version (`printImg.html`, no install), a Windows executable, and a macOS app. Built by [Isaac](https://www.codeslog.com).
+
 ## 동작
 
 - 이미지 폭을 인쇄 가능 영역에 100% 맞춥니다. 작으면 확대, 크면 축소.
@@ -85,3 +89,7 @@ lpadmin -p PrintImgTest -E -v ipp://localhost:8632/ipp/print -m everywhere
 - [ ] "바로 인쇄…"로 미리보기가 뜨고, 프린터를 골라 인쇄하면 실제 종이에 A4 3장이 나온다
 - [ ] "배경색" 제거로 회색 배경이 흰색으로 출력된다
 - [ ] Python이 없는 PC에서 `PrintImg.exe`가 실행된다
+
+## 만든 사람 · 라이선스
+
+[Isaac](https://www.codeslog.com)이 만들었습니다. MIT 라이선스로 배포하며 전문은 [LICENSE](LICENSE)에 있습니다. 문의나 제안은 https://www.codeslog.com 으로.

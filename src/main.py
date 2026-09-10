@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
@@ -22,6 +23,8 @@ from preview import PreviewWindow  # noqa: E402
 from printer import list_printers, print_pages  # noqa: E402
 
 APP_TITLE = "PrintImg"
+AUTHOR = "Isaac"
+AUTHOR_URL = "https://www.codeslog.com"
 MARGIN_MIN = 0
 MARGIN_MAX = 30
 MARGIN_DEFAULT = 10
@@ -109,6 +112,12 @@ class App(tk.Tk):
 
         self.status = ttk.Label(frame, text="", wraplength=360)
         self.status.grid(row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
+
+        credit = ttk.Label(
+            frame, text=f"Made by {AUTHOR} · codeslog.com", foreground="#888", cursor="hand2"
+        )
+        credit.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        credit.bind("<Button-1>", lambda e: webbrowser.open(AUTHOR_URL))
 
     # ----- 사용자 조작 -----
 
