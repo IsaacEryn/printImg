@@ -81,6 +81,7 @@
 		background: var(--accent); color: #fff; cursor: pointer;
 	}
 	button:disabled { background: #9a9aa3; cursor: not-allowed; }
+	button.secondary { margin-top: 8px; color: var(--accent); background: #fff; border: 1px solid var(--accent); }
 	#fileInfo { margin: 8px 0 0; word-break: break-all; }
 	#status { margin: 10px 0 0; min-height: 1.5em; }
 	#error { margin: 10px 0 0; color: var(--danger); font-weight: 600; }
@@ -111,19 +112,56 @@
 		position: absolute; right: 6px; bottom: 4px;
 		font-size: 12px; color: var(--muted);
 	}
-	.page .cut {
-		position: absolute; left: 0; right: 0;
+	/* 자르는 선. .cut은 높이 0인 기준점이고(top은 조각 높이 기준 %), 실제로 잡는 곳은 위아래로 24px인 .cut-handle */
+	.page .cut { position: absolute; left: 0; right: 0; height: 0; }
+	.page .cut-handle {
+		position: absolute; left: 0; right: 0; top: -12px; height: 24px;
+		cursor: ns-resize;
+		touch-action: none; /* 터치로 끌 때 화면이 스크롤되지 않게 */
+	}
+	.page .cut-handle::before {
+		content: ""; position: absolute; left: 0; right: 0; top: 11px;
 		border-top: 2px dashed var(--danger);
 	}
-	.page .cut span {
-		position: absolute; right: 4px; top: -20px;
-		font-size: 12px; color: var(--danger); background: rgba(255,255,255,.9); padding: 0 4px;
+	.page .cut.manual .cut-handle::before { border-top-style: solid; } /* 직접 옮긴 선은 실선 */
+	.page .grip {
+		position: absolute; left: 50%; top: 4px; width: 48px; height: 16px; margin-left: -24px;
+		border-radius: 8px; background: var(--danger);
+	}
+	.page .grip::before, .page .grip::after {
+		content: ""; position: absolute; left: 14px; right: 14px; height: 2px; background: #fff;
+	}
+	.page .grip::before { top: 5px; }
+	.page .grip::after { top: 9px; }
+	.page .cut-tools {
+		position: absolute; right: 4px; bottom: 14px; max-width: calc(100% - 8px);
+		display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px;
+		padding: 2px 4px; border-radius: 4px;
+		font-size: 12px; color: var(--danger); background: rgba(255,255,255,.92);
+	}
+	.page .cut-tools button {
+		width: auto; min-width: 24px; min-height: 24px; padding: 0 6px;
+		font-size: 12px; line-height: 1;
+		color: var(--danger); background: #fff; border: 1px solid var(--danger); border-radius: 4px;
+	}
+	.page .cut.dragging .cut-tools button { display: none; } /* 끄는 동안 이미지를 가리지 않게 */
+	#pages.by-pointer .cut :focus-visible { outline: none; } /* 마우스로 조작한 뒤에는 링을 숨기고, 키를 누르면 다시 보인다 */
+	/* 선을 옮기는 동안: 선 아래는 다음 장으로 넘어가는 부분 */
+	.page .veil {
+		position: absolute; left: 0; right: 0; bottom: 0;
+		background: repeating-linear-gradient(135deg, rgba(255,255,255,.82) 0 8px, rgba(225,225,232,.82) 8px 16px);
+		pointer-events: none;
+	}
+	.page .veil span {
+		position: absolute; left: 50%; top: 18px; transform: translateX(-50%);
+		padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+		font-size: 12px; color: var(--muted); background: #fff;
 	}
 
 	/* ---------- 인쇄 시 ---------- */
 	@media print {
 		body { background: #fff; }
-		.panel, .num, .cut { display: none !important; }
+		.panel, .num, .cut, .veil { display: none !important; }
 		.app { display: block; min-height: 0; }
 		.preview { padding: 0; }
 		.page {
@@ -149,6 +187,14 @@ document.addEventListener('DOMContentLoaded', function () {
 	const MAX_RENDER_W    = 4096; // 캔버스 최대 폭 (거대 이미지 보호, 190mm 기준 약 547 DPI)
 	const RENDER_DELAY_MS = 200;  // 여백 입력 중 재계산 지연
 
+	// 자르는 선 직접 옮기기
+	const MIN_PAGE_RATIO  = 0.05; // 한 장의 최소 높이 (page_h × 이 비율)
+	const KEY_STEP_MM     = 1;    // 방향키 한 번 (인쇄 기준 mm)
+	const KEY_BIG_STEP_MM = 10;   // Shift+방향키, PageUp/PageDown
+	const BTN_STEP_MM     = 5;    // ▲▼ 버튼 한 번
+	const EDGE_SCROLL_PX  = 48;   // 끄는 동안 창 위아래 끝 이 안쪽이면 자동 스크롤
+	const EDGE_SCROLL_MAX = 20;   // 자동 스크롤 최대 속도 (프레임당 px)
+
 	const fileInput = document.getElementById('file');
 	const keepBox   = document.getElementById('keep');
 	const smartBox  = document.getElementById('smart');
@@ -161,6 +207,7 @@ document.addEventListener('DOMContentLoaded', function () {
 	const status    = document.getElementById('status');
 	const errorEl   = document.getElementById('error');
 	const pagesEl   = document.getElementById('pages');
+	const resetCutsBtn = document.getElementById('resetCuts');
 
 	let img = null;          // 로드된 원본 이미지
 	let fileName = '';
@@ -169,6 +216,10 @@ document.addEventListener('DOMContentLoaded', function () {
 	let bgManual = false;    // 사용자가 색을 직접 골랐는지
 	let pixelReadFailed = false;
 	let renderTimer = null;
+	const manualCuts = new Set(); // 사용자가 직접 옮긴 자르는 위치 (원본 y). 옵션을 바꿔도 유지하고 새 이미지에서 비움
+	let view = null;         // 마지막 render() 결과 { segs, pageH, dispW, scale, renderW }
+	let edit = null;         // 옮기는 중인 선 { index, seg, y, min, max, end, canvas, veil, cut, blank, drag }
+	let editTimer = null;    // 키보드·버튼 입력이 멈추면 확정
 
 	// ---------- 배경색 처리 ----------
 	const BG_TOLERANCE = 16;   // 배경색과 채널당 이 차이 이하면 배경 픽셀
@@ -320,11 +371,22 @@ document.addEventListener('DOMContentLoaded', function () {
 		return out;
 	}
 
-	// 분할 위치 결정 → [{y0, y1, smart}] (smart: 빈 줄에서 잘랐는지)
+	// 분할 위치 결정 → [{y0, y1, smart, manual, blank}]
+	// smart: 자동으로 빈 줄에서 잘랐는지, manual: 직접 옮긴 선인지, blank: (manual일 때) 그 줄이 빈 줄인지
+	// 직접 옮긴 선은 강제 페이지 나눔으로 다루고, 그 사이만 자동으로 나눈다.
 	function segments(naturalH, pageH, smart) {
+		const manual = [...manualCuts].sort((a, b) => a - b);
 		const segs = [];
-		let y0 = 0;
-		while (naturalH - y0 > pageH) {
+		let y0 = 0, next = 0;
+		for (;;) {
+			while (next < manual.length && manual[next] <= y0) next++;
+			if (next < manual.length && manual[next] - y0 <= pageH) {
+				const y1 = manual[next];
+				segs.push({ y0, y1, smart: false, manual: true, blank: blankRows(y1, y1 + 1)[0] === 1 });
+				y0 = y1;
+				continue;
+			}
+			if (naturalH - y0 <= pageH) break;
 			const yIdeal = y0 + pageH;
 			let cut = yIdeal, found = false;
 			if (smart) {
@@ -335,10 +397,10 @@ document.addEventListener('DOMContentLoaded', function () {
 					if (blank[y - from]) { cut = y; found = true; break; }
 				}
 			}
-			segs.push({ y0, y1: cut, smart: found });
+			segs.push({ y0, y1: cut, smart: found, manual: false });
 			y0 = cut;
 		}
-		segs.push({ y0, y1: naturalH, smart: false });
+		segs.push({ y0, y1: naturalH, smart: false, manual: false });
 		// 마지막 조각이 전부 빈 줄(끝 여백)이면 버린다. 한 페이지를 몇 px만 넘는 캡처에서 백지가 나오던 문제. 분할 토글과 무관.
 		while (segs.length > 1) {
 			const last = segs[segs.length - 1];
@@ -348,10 +410,9 @@ document.addEventListener('DOMContentLoaded', function () {
 		return segs;
 	}
 
-	// 조각 하나를 페이지 요소로 만듦
-	function makePage(seg, idx, total, dispW, scale, renderW, sheetH) {
-		const srcH = seg.y1 - seg.y0;
-		const { canvas, ctx } = drawSlice(seg.y0, seg.y1, renderW, bgOn.checked);
+	// 원본의 [y0, y1) 구간을 배경색 처리까지 마친 페이지용 캔버스로 돌려줌
+	function pageCanvas(y0, y1) {
+		const { canvas, ctx } = drawSlice(y0, y1, view.renderW, bgOn.checked);
 		if (bgOn.checked && bgColor && !bgIsWhite(bgColor)) {
 			try {
 				const id = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -361,8 +422,56 @@ document.addEventListener('DOMContentLoaded', function () {
 				pixelReadFailed = true;
 			}
 		}
-		canvas.style.setProperty('--w', `${dispW}px`);
-		canvas.style.setProperty('--h', `${srcH * scale}px`);
+		canvas.style.setProperty('--w', `${view.dispW}px`);
+		canvas.style.setProperty('--h', `${(y1 - y0) * view.scale}px`);
+		return canvas;
+	}
+
+	// 선을 옮길 수 있는 범위(원본 y). 아래로는 A4 한 장 높이까지이고, 그다음 직접 옮긴 선을 넘지 못한다.
+	function cutRange(seg) {
+		const gap = Math.max(1, Math.round(view.pageH * MIN_PAGE_RATIO));
+		const nextManual = Math.min(Infinity, ...[...manualCuts].filter(y => y > seg.y1));
+		const lowest = Math.min(seg.y0 + view.pageH, img.naturalHeight - gap, nextManual - gap);
+		return { min: Math.min(seg.y1, seg.y0 + gap), max: Math.max(seg.y1, lowest) };
+	}
+
+	function cutKind(seg) {
+		if (!seg.manual) return seg.smart ? '빈 줄에서 자름' : '등분';
+		if (pixelReadFailed) return '직접 지정';
+		return seg.blank ? '직접 지정 · 빈 줄' : '직접 지정 · 내용을 자름';
+	}
+
+	// 선의 글자와 접근성 값을 갱신
+	function showCut(cut, text, y) {
+		cut.querySelector('.cut-label').textContent = `${text} · y=${y}`;
+		const handle = cut.querySelector('.cut-handle');
+		handle.setAttribute('aria-valuenow', y);
+		handle.setAttribute('aria-valuetext', `${text}, 원본 세로 ${y}픽셀`);
+	}
+
+	function makeCut(seg, idx) {
+		const { min, max } = cutRange(seg);
+		const n = idx + 1;
+		const cut = document.createElement('div');
+		cut.className = seg.manual ? 'cut manual' : 'cut';
+		cut.dataset.index = idx;
+		cut.style.top = '100%'; // 인쇄 영역(.content) 바닥 = 조각 끝
+		cut.innerHTML = `
+			<div class="cut-handle" role="slider" tabindex="0" aria-orientation="vertical" title="끌어서 자를 위치 변경"
+				aria-label="${n}페이지를 자를 위치" aria-valuemin="${min}" aria-valuemax="${max}"><span class="grip"></span></div>
+			<div class="cut-tools">
+				<span class="cut-label"></span>
+				<button type="button" data-action="up" aria-label="${n}페이지 자를 위치를 위로" title="위로">▲</button>
+				<button type="button" data-action="down" aria-label="${n}페이지 자를 위치를 아래로" title="아래로">▼</button>
+				${seg.manual ? `<button type="button" data-action="auto" aria-label="${n}페이지 자를 위치를 자동으로 되돌리기" title="자동 위치로 되돌리기">자동</button>` : ''}
+			</div>`;
+		showCut(cut, cutKind(seg), seg.y1);
+		return cut;
+	}
+
+	// 조각 하나를 페이지 요소로 만듦
+	function makePage(seg, idx, total) {
+		const canvas = pageCanvas(seg.y0, seg.y1);
 		canvas.setAttribute('role', 'img');
 		canvas.setAttribute('aria-label', `${fileName} ${idx + 1} / ${total} 페이지`);
 
@@ -375,14 +484,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		content.appendChild(canvas);
 		page.appendChild(content);
 
-		if (idx < total - 1) {
-			const cut = document.createElement('div');
-			cut.className = 'cut';
-			cut.setAttribute('aria-hidden', 'true');
-			cut.style.top = '100%'; // 인쇄 영역(.content) 바닥 = 조각 끝
-			cut.innerHTML = `<span>${seg.smart ? '빈 줄에서 자름' : '등분'} · y=${seg.y1}</span>`;
-			content.appendChild(cut);
-		}
+		if (idx < total - 1) content.appendChild(makeCut(seg, idx));
 		const num = document.createElement('div');
 		num.className = 'num';
 		num.setAttribute('aria-hidden', 'true');
@@ -393,22 +495,23 @@ document.addEventListener('DOMContentLoaded', function () {
 
 	function render() {
 		const m = applyMargin();
+		stopEdit();
 		if (!img) return;
 
-		const { dispW, scale, pageH, sheetH } = layout(img.naturalWidth, !keepBox.checked, m);
+		const { dispW, scale, pageH } = layout(img.naturalWidth, !keepBox.checked, m);
 		const renderW = Math.min(img.naturalWidth, MAX_RENDER_W);
 		pixelReadFailed = false;
 		const segs = segments(img.naturalHeight, pageH, smartBox.checked);
+		view = { segs, pageH, dispW, scale, renderW };
 
-		pagesEl.replaceChildren(
-			...segs.map((seg, i) => makePage(seg, i, segs.length, dispW, scale, renderW, sheetH))
-		);
+		pagesEl.replaceChildren(...segs.map((seg, i) => makePage(seg, i, segs.length)));
+		resetCutsBtn.hidden = manualCuts.size === 0;
 
 		const notes = [];
-		if (smartBox.checked && segs.length > 1) {
-			const smartCount = segs.filter(s => s.smart).length;
-			notes.push(`빈 줄 컷 ${smartCount} / ${segs.length - 1}`);
-		}
+		const cuts = segs.slice(0, -1); // 마지막 장에는 자르는 선이 없다
+		if (smartBox.checked && cuts.length) notes.push(`빈 줄 컷 ${cuts.filter(s => s.smart).length} / ${cuts.length}`);
+		const manualCount = cuts.filter(s => s.manual).length;
+		if (manualCount) notes.push(`직접 옮긴 선 ${manualCount}`);
 		if (renderW < img.naturalWidth) notes.push(`인쇄용 렌더링 폭 ${renderW}px로 축소`);
 		if (bgOn.checked) {
 			if (!bgColor) notes.push('배경색 감지 실패');
@@ -427,6 +530,174 @@ document.addEventListener('DOMContentLoaded', function () {
 		renderTimer = setTimeout(render, RENDER_DELAY_MS);
 	}
 
+	// ---------- 자르는 선 옮기기 ----------
+	// 옮기는 동안에는 그 장만 한 장 높이까지 펼쳐 보여 주고, 확정하면 전체를 다시 나눈다.
+
+	// 인쇄 기준 mm를 원본 px로
+	const mmToSrc = mm => Math.max(1, Math.round(mmToPx(mm) / view.scale));
+
+	function stopEdit() {
+		clearTimeout(editTimer);
+		if (edit && edit.drag) cancelAnimationFrame(edit.drag.raf);
+		edit = null;
+	}
+
+	function beginEdit(index) {
+		if (edit && edit.index === index) return edit;
+		if (edit) finishEdit(true);
+		const cut = pagesEl.querySelector(`.cut[data-index="${index}"]`);
+		if (!cut) return null;
+		const seg = view.segs[index];
+		const end = Math.min(seg.y0 + view.pageH, img.naturalHeight);
+		const old = cut.parentElement.querySelector('canvas');
+		const canvas = pageCanvas(seg.y0, end);
+		canvas.setAttribute('role', 'img');
+		canvas.setAttribute('aria-label', old.getAttribute('aria-label'));
+		old.replaceWith(canvas);
+		const veil = document.createElement('div');
+		veil.className = 'veil';
+		veil.innerHTML = '<span>다음 장으로 넘어갑니다</span>';
+		cut.before(veil);
+		edit = {
+			index, seg, end, canvas, veil, cut, ...cutRange(seg), y: seg.y1, drag: null,
+			blank: blankRows(seg.y0, Math.min(end + 1, img.naturalHeight)),
+		};
+		placeEdit(seg.y1);
+		return edit;
+	}
+
+	function placeEdit(y) {
+		const e = edit;
+		e.y = Math.round(Math.min(e.max, Math.max(e.min, y)));
+		e.cut.style.top = e.veil.style.top = `${(e.y - e.seg.y0) / (e.end - e.seg.y0) * 100}%`;
+		const shown = e.y === e.seg.y1 ? e.seg : { manual: true, blank: e.blank[e.y - e.seg.y0] === 1 };
+		showCut(e.cut, cutKind(shown), e.y);
+	}
+
+	function finishEdit(commit) {
+		if (!edit) return;
+		const { index, seg, y } = edit;
+		stopEdit();
+		if (commit && y !== seg.y1) {
+			if (seg.manual) manualCuts.delete(seg.y1);
+			manualCuts.add(y);
+			// 앞 장 시작부터 새 위치까지가 한 장에 들어가면 앞의 자동 선이 사라지므로 그 선도 함께 고정한다
+			const prev = view.segs[index - 1];
+			if (prev && !prev.manual && y - prev.y0 <= view.pageH) manualCuts.add(prev.y1);
+		}
+		renderKeepFocus();
+	}
+
+	// render()는 페이지를 통째로 새로 만드므로, 선의 컨트롤에 있던 포커스를 같은 자리로 돌려놓는다
+	function renderKeepFocus() {
+		const active = document.activeElement;
+		const cut = active?.closest('.cut');
+		if (!cut) return render();
+		const sel = `.cut[data-index="${cut.dataset.index}"]`;
+		const action = active.dataset.action;
+		render();
+		const target = (action && pagesEl.querySelector(`${sel} [data-action="${action}"]`))
+			|| pagesEl.querySelector(`${sel} .cut-handle`) || printBtn;
+		target.focus({ preventScroll: true });
+	}
+
+	// 키보드·버튼: 바로 옮겨 보여 주고, 입력이 멈추면 확정
+	function nudge(index, target) {
+		const e = beginEdit(index);
+		if (!e) return;
+		placeEdit(target(e));
+		clearTimeout(editTimer);
+		editTimer = setTimeout(() => finishEdit(true), RENDER_DELAY_MS);
+	}
+
+	function clearManualCut(index) {
+		const seg = view.segs[index];
+		if (!seg.manual) return;
+		manualCuts.delete(seg.y1);
+		renderKeepFocus();
+	}
+
+	// 포인터 위치 → 선 위치. 스크롤이 움직여도 맞도록 매번 캔버스 위치를 다시 잰다
+	function followPointer() {
+		const r = edit.canvas.getBoundingClientRect();
+		placeEdit(edit.seg.y0 + (edit.drag.clientY - edit.drag.grab - r.top) / r.height * (edit.end - edit.seg.y0));
+	}
+
+	// A4 한 장이 창보다 길 수 있어서, 창 끝으로 끌면 스크롤한다. 휠로 스크롤해도 선이 포인터를 따라온다.
+	function dragFrame() {
+		if (!edit || !edit.drag) return;
+		const { clientY, moved } = edit.drag;
+		const h = document.documentElement.clientHeight;
+		const over = clientY < EDGE_SCROLL_PX ? clientY - EDGE_SCROLL_PX : clientY > h - EDGE_SCROLL_PX ? clientY - (h - EDGE_SCROLL_PX) : 0;
+		if (over && moved) window.scrollBy(0, Math.round(Math.max(-1, Math.min(1, over / EDGE_SCROLL_PX)) * EDGE_SCROLL_MAX));
+		followPointer();
+		edit.drag.raf = requestAnimationFrame(dragFrame);
+	}
+
+	// 선 요소는 render()로 계속 바뀌므로 #pages에 위임한다
+	document.addEventListener('keydown', () => pagesEl.classList.remove('by-pointer'));
+	pagesEl.addEventListener('pointerdown', e => {
+		if (e.target.closest('.cut')) pagesEl.classList.add('by-pointer');
+		if (e.button !== 0 || !e.target.closest('.cut-handle')) return;
+		e.preventDefault(); // 끄는 동안 글자·이미지가 선택되지 않게
+		const index = Number(e.target.closest('.cut').dataset.index);
+		if (edit) finishEdit(true); // 키보드로 옮기던 게 남았으면 먼저 확정 (이때 선 요소가 새로 만들어진다)
+		const handle = pagesEl.querySelector(`.cut[data-index="${index}"] .cut-handle`);
+		if (!handle) return;
+		handle.focus({ preventScroll: true });
+		handle.setPointerCapture(e.pointerId);
+		const ed = beginEdit(index);
+		const r = ed.canvas.getBoundingClientRect();
+		const lineY = r.top + (ed.y - ed.seg.y0) / (ed.end - ed.seg.y0) * r.height;
+		ed.drag = { id: e.pointerId, clientY: e.clientY, grab: e.clientY - lineY, moved: false, raf: requestAnimationFrame(dragFrame) };
+		ed.cut.classList.add('dragging');
+	});
+	pagesEl.addEventListener('pointermove', e => {
+		if (!edit?.drag || e.pointerId !== edit.drag.id) return;
+		edit.drag.clientY = e.clientY;
+		edit.drag.moved = true;
+		followPointer();
+	});
+	pagesEl.addEventListener('pointerup', e => { if (edit?.drag && e.pointerId === edit.drag.id) finishEdit(true); });
+	pagesEl.addEventListener('pointercancel', e => { if (edit?.drag && e.pointerId === edit.drag.id) finishEdit(false); });
+
+	pagesEl.addEventListener('keydown', e => {
+		if (!e.target.closest('.cut-handle')) return;
+		const index = Number(e.target.closest('.cut').dataset.index);
+		if (e.key === 'Escape') { finishEdit(false); return; }
+		if (edit?.drag) return;
+		if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); stopEdit(); clearManualCut(index); return; }
+		const small = mmToSrc(KEY_STEP_MM), big = mmToSrc(KEY_BIG_STEP_MM);
+		const step = e.shiftKey ? big : small;
+		const moves = {
+			ArrowUp: ed => ed.y - step, ArrowDown: ed => ed.y + step,
+			PageUp: ed => ed.y - big, PageDown: ed => ed.y + big,
+			Home: ed => ed.min, End: ed => ed.max,
+		};
+		if (!moves[e.key]) return;
+		e.preventDefault();
+		nudge(index, moves[e.key]);
+	});
+
+	pagesEl.addEventListener('click', e => {
+		const btn = e.target.closest('.cut-tools button');
+		if (!btn) return;
+		const index = Number(btn.closest('.cut').dataset.index);
+		const step = mmToSrc(BTN_STEP_MM);
+		if (btn.dataset.action === 'up') nudge(index, ed => ed.y - step);
+		else if (btn.dataset.action === 'down') nudge(index, ed => ed.y + step);
+		else { stopEdit(); clearManualCut(index); }
+	});
+
+	resetCutsBtn.addEventListener('click', () => {
+		manualCuts.clear();
+		render();
+		smartBox.focus(); // 누른 버튼이 사라지므로 포커스를 옮겨 둔다
+	});
+
+	// 미리보기 중에 인쇄하면 펼친 캔버스가 그대로 나가므로 먼저 확정
+	window.addEventListener('beforeprint', () => finishEdit(true));
+
 	// File 객체 하나를 읽어 미리보기까지 그린다. 파일 선택·붙여넣기·끌어놓기가 모두 이 함수를 쓴다.
 	// name은 화면·문서 제목에 쓸 이름 (붙여넣기는 브라우저가 "image.png"로 주므로 따로 받는다).
 	function loadFile(file, name) {
@@ -441,6 +712,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			URL.revokeObjectURL(url);
 			if (seq !== loadSeq) return; // 그 사이 다른 파일을 골랐으면 무시
 			img = im;
+			manualCuts.clear();
 			bgColor = detectBackground(im);
 			bgManual = false;
 			if (bgColor) bgPick.value = toHex(bgColor);
@@ -452,6 +724,8 @@ document.addEventListener('DOMContentLoaded', function () {
 			URL.revokeObjectURL(url);
 			if (seq !== loadSeq) return;
 			img = null;
+			manualCuts.clear();
+			resetCutsBtn.hidden = true;
 			pagesEl.replaceChildren();
 			printBtn.disabled = true;
 			fileInfo.textContent = name;
@@ -528,6 +802,8 @@ document.addEventListener('DOMContentLoaded', function () {
 				<input type="checkbox" id="smart" checked>
 				<label for="smart">빈 줄에 맞춰 자르기</label>
 			</div>
+			<p class="hint">미리보기의 빨간 선을 위아래로 끌면 페이지마다 자를 위치를 바꿀 수 있습니다. 선을 선택한 뒤 <kbd>↑</kbd> <kbd>↓</kbd>로도 옮길 수 있습니다.</p>
+			<button type="button" id="resetCuts" class="secondary" hidden>직접 옮긴 선 모두 되돌리기</button>
 			<div class="field">
 				<input type="checkbox" id="bgOn">
 				<label for="bgOn">배경색</label>
