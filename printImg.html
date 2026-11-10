@@ -186,6 +186,8 @@
 		background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
 	}
 	.preview-tools[hidden] { display: none; }
+	/* 위에 붙은 띠가 포커스를 덮지 않게 스크롤할 때 띠 높이만큼 띄운다. 높이는 창 폭에 따라 달라 스크립트가 잰다 */
+	html { scroll-padding-top: calc(var(--tools-h, 0px) + 12px); }
 	#undoTools, #markTools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
 
 	/* ---------- 인쇄 시 ---------- */
@@ -655,6 +657,17 @@ document.addEventListener('DOMContentLoaded', function () {
 		paintMasks(ctx, y0, y1, destW, destH);
 	}
 
+	// 가림 m이 원본 조각 s를 통해 문서 [y0, y1)에 걸치는 줄 범위. 걸치지 않으면 bottom <= top
+	const maskRows = (m, s, y0, y1) => ({
+		top: Math.max(y0, Math.max(m.y, s.s0) - s.s0 + s.d0),
+		bottom: Math.min(y1, Math.min(m.y + m.h, s.s1) - s.s0 + s.d0),
+	});
+
+	const hasMask = (y0, y1) => doc.masks.some(m => doc.spans.some(s => {
+		const { top, bottom } = maskRows(m, s, y0, y1);
+		return bottom > top;
+	}));
+
 	// 가린 사각형을 픽셀에 검게 칠한다. DOM으로 덮으면 인쇄나 PDF에서 원본이 드러날 수 있어서다.
 	// 줄여 그리면 옆 픽셀이 섞여 들어오므로 축소할 때는 그만큼 더 넓게 칠한다.
 	function paintMasks(ctx, y0, y1, destW, destH) {
@@ -667,8 +680,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			const left = Math.max(0, Math.floor(m.x * scaleX) - pad);
 			const right = Math.min(destW, Math.ceil((m.x + m.w) * scaleX) + pad);
 			for (const s of doc.spans) {
-				const top = Math.max(y0, Math.max(m.y, s.s0) - s.s0 + s.d0);
-				const bottom = Math.min(y1, Math.min(m.y + m.h, s.s1) - s.s0 + s.d0);
+				const { top, bottom } = maskRows(m, s, y0, y1);
 				if (bottom <= top) continue;
 				const destTop = Math.max(0, Math.floor((top - y0) * scaleY) - pad);
 				const destBottom = Math.min(destH, Math.ceil((bottom - y0) * scaleY) + pad);
@@ -839,9 +851,10 @@ document.addEventListener('DOMContentLoaded', function () {
 		}
 		segs.push({ y0, y1: totalH, smart: false, manual: false });
 		// 마지막 조각이 전부 빈 줄(끝 여백)이면 버린다. 한 페이지를 몇 px만 넘는 캡처에서 백지가 나오던 문제. 분할 토글과 무관.
+		// 가로 전체를 가린 줄도 한 가지 색이라 빈 줄로 읽히지만 끝 여백이 아니다.
 		while (segs.length > 1) {
 			const last = segs[segs.length - 1];
-			if (!blankRows(last.y0, last.y1).every(v => v)) break;
+			if (hasMask(last.y0, last.y1) || !blankRows(last.y0, last.y1).every(v => v)) break;
 			segs.pop();
 		}
 		return segs;
@@ -1141,6 +1154,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		const target = (action && pagesEl.querySelector(`${sel} [data-action="${action}"]`))
 			|| pagesEl.querySelector(`${sel} .cut-handle`) || printBtn;
 		target.focus({ preventScroll: true });
+		if (!pagesEl.classList.contains('by-pointer')) target.scrollIntoView({ block: 'nearest' }); // 키보드 되돌리기로 선이 멀리 돌아가도 포커스가 보이게
 	}
 
 	// 키보드·버튼: 바로 옮겨 보여 주고, 입력이 멈추면 확정
@@ -1148,6 +1162,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		const e = beginEdit(index);
 		if (!e) return;
 		placeEdit(target(e));
+		e.cut.querySelector('.cut-handle').scrollIntoView({ block: 'nearest' }); // 도구 띠 밑이나 창 밖으로 나가지 않게
 		clearTimeout(editTimer);
 		editTimer = setTimeout(() => finishEdit(true), NUDGE_COMMIT_MS);
 	}
@@ -1591,6 +1606,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		// 미리보기에서 끌어 세로 구간을 빼거나 사각형을 검게 가린다. 저장하는 값은 원본 좌표다.
 		// 가리기는 paintMasks()가 모든 캔버스의 픽셀에 칠하고, #markSel은 끄는 동안에만 있는 표시일 뿐이다.
 		const previewTools = document.getElementById('previewTools');
+		new ResizeObserver(() => document.documentElement.style.setProperty('--tools-h', `${previewTools.offsetHeight}px`)).observe(previewTools);
 		const toolBand   = document.getElementById('toolBand');
 		const toolMask   = document.getElementById('toolMask');
 		const toolHint   = document.getElementById('markHint');
