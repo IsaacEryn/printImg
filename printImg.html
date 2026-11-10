@@ -1298,6 +1298,53 @@ document.addEventListener('DOMContentLoaded', function () {
 	// ---------- 여러 이미지 끝 ----------
 
 	// ---------- 설정 기억 ----------
+	// 여백과 옵션만 이 브라우저에 남긴다. 이미지·파일 이름·자르는 선·구간·가리기·되돌리기 기록은 저장하지 않고,
+	// 배경색 값(bgPick)도 이미지마다 감지하므로 남기지 않는다.
+	{
+		const SETTINGS_KEY = 'printimg.settings.v1';
+		const flagBoxes = ['keep', 'smart', 'bgOn', 'pageNumbers'].map(id => document.getElementById(id)).filter(Boolean); // 없는 칸은 건너뜀
+		const savedIds = new Set(['margin', 'bgMode', ...flagBoxes.map(box => box.id)]);
+
+		// file://이나 사생활 보호 창에서는 window.localStorage를 읽기만 해도 예외가 날 수 있어 접근까지 try 안에 둔다
+		function readSettings() {
+			try {
+				return JSON.parse(window.localStorage.getItem(SETTINGS_KEY));
+			} catch (e) {
+				return null;
+			}
+		}
+
+		function saveSettings() {
+			const data = { margin: marginMm(), bgMode: bgMode.value };
+			for (const box of flagBoxes) data[box.id] = box.checked;
+			try {
+				window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
+			} catch (e) {
+				// 저장하지 못해도 앱은 그대로 동작한다
+			}
+		}
+
+		// 저장값은 손상됐을 수 있으므로 형식이 맞는 항목만 받아들인다
+		function applySettings(saved) {
+			if (!saved || typeof saved !== 'object') return;
+			if (Number.isFinite(saved.margin)) {
+				marginIn.value = saved.margin;
+				marginIn.value = marginMm(); // 0~30 정리는 입력칸과 같은 규칙으로
+			}
+			for (const box of flagBoxes) {
+				if (typeof saved[box.id] === 'boolean') box.checked = saved[box.id];
+			}
+			if ([...bgMode.options].some(option => option.value === saved.bgMode)) bgMode.value = saved.bgMode;
+		}
+
+		applySettings(readSettings());
+		bgMode.disabled = bgPick.disabled = !bgOn.checked;
+
+		const saveIfListed = e => { if (savedIds.has(e.target.id)) saveSettings(); };
+		const panel = document.querySelector('.panel');
+		panel.addEventListener('input', saveIfListed);
+		panel.addEventListener('change', saveIfListed); // 입력칸의 change 처리(범위 정리)가 먼저 끝난 뒤 여기까지 올라온다
+	}
 	// ---------- 설정 기억 끝 ----------
 
 	applyMargin();
