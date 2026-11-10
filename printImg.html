@@ -1518,7 +1518,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			btn.type = 'button';
 			btn.textContent = action;
 			btn.setAttribute('aria-label', label);
-			btn.addEventListener('click', remove);
+			btn.addEventListener('click', e => { if (e.detail <= 1) remove(); }); // 빠르게 두 번 누르면 올라온 다음 줄까지 지워지지 않게
 			row.append(name, btn);
 			return row;
 		}
