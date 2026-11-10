@@ -211,6 +211,48 @@
 	/* ---------- 페이지 나누기 끝 ---------- */
 
 	/* ---------- 구간 빼기·가리기 ---------- */
+	#markTools button {
+		width: auto; min-width: 24px; min-height: 32px; padding: 4px 10px;
+		font-size: 13px;
+		color: var(--accent); background: var(--panel);
+		border: 1px solid var(--accent); border-radius: 6px;
+	}
+	#markTools button[aria-pressed="true"] { color: #fff; background: var(--accent); }
+	#markTools button[aria-pressed="true"]::before { content: "✓ "; } /* 색만으로 구분하지 않도록 */
+	#markTools button:disabled { color: var(--muted); background: var(--panel); border-color: var(--line); }
+	#markHint { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+	#markHint:empty { display: none; }
+	/* 도구를 켜면 페이지 어디서든 끌 수 있게 선과 그 단추는 포인터를 받지 않는다 */
+	#pages.tool-on { position: relative; user-select: none; }
+	#pages.tool-on .page { cursor: crosshair; touch-action: none; }
+	#pages.tool-on .cut, #pages.tool-on .add-break { pointer-events: none; }
+	/* 끄는 동안만 보이는 범위 표시. 가린 결과는 이것이 아니라 캔버스 픽셀이다 */
+	#markSel { position: absolute; z-index: 4; pointer-events: none; border: 2px solid var(--danger); }
+	#markSel::before { content: ""; position: absolute; inset: 0; background: var(--danger); opacity: .2; }
+	#markSel.mask { border-color: var(--text); }
+	#markSel.mask::before { background: var(--text); opacity: .5; }
+	#marksSection h3 { font-size: 13px; margin: 12px 0 4px; font-weight: 600; }
+	.mark-list { list-style: none; margin: 8px 0 0; padding: 0; }
+	.mark-list:empty { display: none; }
+	.mark-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; font-size: 13px; }
+	.mark-list span { min-width: 0; overflow-wrap: anywhere; }
+	.mark-list button {
+		flex: none; width: auto; min-width: 24px; min-height: 24px; padding: 2px 8px;
+		font-size: 12px;
+		color: var(--accent); background: var(--panel);
+		border: 1px solid var(--accent); border-radius: 4px;
+	}
+	.mark-forms { margin-top: 10px; }
+	.mark-forms summary { cursor: pointer; font-size: 13px; color: var(--muted); font-weight: 600; }
+	.mark-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
+	.mark-fields .field { margin: 4px 0; min-width: 0; font-size: 13px; }
+	.mark-fields input[type=number] { width: 100%; min-width: 0; }
+	.mark-fields input[aria-invalid="true"] { border-color: var(--danger); }
+	.mark-error { margin: 4px 0 0; color: var(--danger); font-size: 13px; font-weight: 600; }
+	.mark-error:empty { display: none; }
+	@media print {
+		#markSel, #marksSection { display: none !important; }
+	}
 	/* ---------- 구간 빼기·가리기 끝 ---------- */
 
 	/* ---------- 쪽 번호 ---------- */
@@ -1289,6 +1331,287 @@ document.addEventListener('DOMContentLoaded', function () {
 	// ---------- 페이지 나누기 끝 ----------
 
 	// ---------- 구간 빼기·가리기 ----------
+	{
+		// 미리보기에서 끌어 세로 구간을 빼거나 사각형을 검게 가린다. 저장하는 값은 원본 좌표다.
+		// 가리기는 paintMasks()가 모든 캔버스의 픽셀에 칠하고, #markSel은 끄는 동안에만 있는 표시일 뿐이다.
+		const previewTools = document.getElementById('previewTools');
+		const toolBand   = document.getElementById('toolBand');
+		const toolMask   = document.getElementById('toolMask');
+		const toolHint   = document.getElementById('markHint');
+		const bandList   = document.getElementById('bandList');
+		const maskList   = document.getElementById('maskList');
+		const marksEmpty = document.getElementById('marksEmpty');
+		const marksSize  = document.getElementById('marksSize');
+		const bandForm   = document.getElementById('bandForm');
+		const maskForm   = document.getElementById('maskForm');
+
+		const TOOL_HINTS = {
+			band: '위아래로 끌면 그 구간이 빠집니다. Shift를 누르면 자석 없이 고르고, Esc로 끝냅니다.',
+			mask: '사각형을 끌면 그곳이 검게 칠해집니다. Esc로 끝냅니다.',
+		};
+
+		let markSeq = 0; // 구간·가림 id 순번
+		let sel = null;  // 끄는 중인 선택 { id, tool, start, cur, clientX, clientY, startX, startY, shift, moved, box, raf, seen, magnets }
+
+		function setTool(tool) {
+			cancelSel();
+			previewTool = tool;
+			pagesEl.classList.toggle('tool-on', Boolean(tool));
+			toolBand.setAttribute('aria-pressed', String(tool === 'band'));
+			toolMask.setAttribute('aria-pressed', String(tool === 'mask'));
+			toolHint.textContent = tool ? TOOL_HINTS[tool] : '';
+		}
+
+		function cancelSel() {
+			if (!sel) return;
+			cancelAnimationFrame(sel.raf);
+			sel.box.remove();
+			sel = null;
+		}
+
+		// 포인터 아래 지점. x·y는 정수로 만들기 전의 원본 x·문서 y이고(가리기는 바깥쪽으로 올림·내림한다), docY는 구간 가장자리에 쓰는 줄이다
+		function locate(clientX, clientY) {
+			const p = pointAt(clientX, clientY);
+			if (!p) return null;
+			const { seg, rect, srcPerPx } = p;
+			return {
+				...p,
+				y: clamp(seg.y0 + (clientY - rect.top) * srcPerPx, seg.y0, seg.y1),
+				x: clamp((clientX - rect.left) * img.naturalWidth / rect.width, 0, img.naturalWidth),
+			};
+		}
+
+		// 선택의 한쪽 끝(문서 y). 구간은 선을 끌 때와 같은 자석에 붙는다.
+		// 규칙은 magnetSnap()과 같지만 한 장을 읽는 데 수십 ms가 걸려서, 선 끌기처럼 장마다 한 번만 읽어 둔다
+		function edgeY(s, p) {
+			if (s.tool !== 'band') return p.y;
+			if (s.shift) return p.docY;
+			const { index, seg, srcPerPx, docY } = p;
+			if (!s.magnets.has(index)) {
+				const scanEnd = Math.min(seg.y1 + 1, docH());
+				s.magnets.set(index, magnetPoints(seg.y0, blankRows(seg.y0, scanEnd), edgeRows(seg.y0, scanEnd), seg.y0, seg.y1, srcPerPx));
+			}
+			return nearestSnap(s.magnets.get(index), docY, SNAP_RADIUS_PX * srcPerPx) ?? docY;
+		}
+
+		function placeBox(s) {
+			const { start, cur, box } = s;
+			const pagesRect = pagesEl.getBoundingClientRect();
+			const a = start.canvas.getBoundingClientRect(), b = cur.canvas.getBoundingClientRect();
+			const yA = a.top + (edgeY(s, start) - start.seg.y0) / start.srcPerPx;
+			const yB = b.top + (edgeY(s, cur) - cur.seg.y0) / cur.srcPerPx;
+			const toPx = a.width / img.naturalWidth;
+			const x0 = s.tool === 'band' ? 0 : Math.min(start.x, cur.x);
+			const x1 = s.tool === 'band' ? img.naturalWidth : Math.max(start.x, cur.x);
+			box.style.left = `${a.left - pagesRect.left + x0 * toPx}px`;
+			box.style.width = `${(x1 - x0) * toPx}px`;
+			box.style.top = `${Math.min(yA, yB) - pagesRect.top}px`;
+			box.style.height = `${Math.abs(yB - yA)}px`;
+			box.hidden = false;
+		}
+
+		// 스크롤로도 포인터 아래가 달라지므로 프레임마다 다시 본다. 달라진 게 없으면 그대로 둔다
+		function followSel() {
+			if (edit) return cancelSel(); // 키보드로 선을 옮기기 시작하면 캔버스가 펼쳐져 좌표가 어긋난다
+			const s = sel, seen = `${s.clientX},${s.clientY},${window.scrollY},${s.shift}`;
+			if (seen === s.seen) return;
+			s.seen = seen;
+			const cur = locate(s.clientX, s.clientY);
+			if (!cur) return cancelSel();
+			s.cur = cur;
+			if (s.moved) placeBox(s);
+		}
+
+		function selFrame() {
+			if (!sel) return;
+			const y = sel.clientY, h = document.documentElement.clientHeight;
+			const over = y < EDGE_SCROLL_PX ? y - EDGE_SCROLL_PX : y > h - EDGE_SCROLL_PX ? y - (h - EDGE_SCROLL_PX) : 0;
+			if (over && sel.moved) window.scrollBy(0, Math.round(clamp(over / EDGE_SCROLL_PX, -1, 1) * EDGE_SCROLL_MAX));
+			followSel();
+			if (sel) sel.raf = requestAnimationFrame(selFrame);
+		}
+
+		function trackPointer(e) {
+			const s = sel;
+			s.clientX = e.clientX;
+			s.clientY = e.clientY;
+			s.shift = e.shiftKey;
+			const dx = s.tool === 'mask' ? Math.abs(e.clientX - s.startX) : 0;
+			if (Math.max(dx, Math.abs(e.clientY - s.startY)) >= DRAG_START_PX) s.moved = true;
+			followSel();
+		}
+
+		// 남길 줄이 하나도 없으면 안내 문구를, 그 밖에는 빈 문자열을 돌려준다
+		function addBand(y0, y1) {
+			if (doc.spans.every(s => s.s0 >= y0 && s.s1 <= y1)) return '이미지 전체를 뺄 수는 없습니다. 한 줄 이상 남겨 주세요.';
+			return mutateDoc('구간 빼기', d => d.bands.push({ id: ++markSeq, y0, y1 })) ? '' : '이미 빠진 구간입니다.';
+		}
+
+		const addMask = (x, y, w, h) => mutateDoc('가리기', d => d.masks.push({ id: ++markSeq, x, y, w, h }));
+
+		function commitSel(s) {
+			const a = edgeY(s, s.start), b = edgeY(s, s.cur);
+			if (s.tool === 'band') {
+				const top = Math.min(a, b), bottom = Math.max(a, b);
+				const message = bottom > top ? addBand(docToSrc(top), docToSrc(bottom)) : '';
+				if (message) errorEl.textContent = message; // 성공하면 render()가 오류 칸을 알아서 정리한다
+				return;
+			}
+			const top = Math.floor(Math.min(a, b)), bottom = Math.ceil(Math.max(a, b));
+			const left = Math.floor(Math.min(s.start.x, s.cur.x)), right = Math.ceil(Math.max(s.start.x, s.cur.x));
+			if (bottom <= top || right <= left) return;
+			const y = docToSrc(top);
+			addMask(left, y, right - left, docToSrc(bottom - 1) + 1 - y); // 끝을 '마지막 줄 + 1'로 재야 뺀 구간에 맞닿아도 그 안까지 넘어가지 않는다
+		}
+
+		pagesEl.addEventListener('pointerdown', e => {
+			if (!previewTool || sel || e.button !== 0 || !e.target.closest('.page')) return;
+			e.preventDefault(); // 끄는 동안 글자·이미지가 선택되지 않게
+			settleEdit(); // 펼친 캔버스로 재면 값이 어긋난다. 다시 그려지므로 그 뒤에 잰다
+			const start = locate(e.clientX, e.clientY);
+			if (!start) return;
+			pagesEl.setPointerCapture(e.pointerId);
+			const box = document.createElement('div');
+			box.id = 'markSel';
+			box.className = previewTool;
+			box.hidden = true;
+			pagesEl.prepend(box); // 맨 앞에 둔다. 뒤에 두면 인쇄 CSS의 .page:last-child가 어긋난다
+			sel = {
+				id: e.pointerId, tool: previewTool, start, cur: start, box, moved: false, shift: e.shiftKey, magnets: new Map(),
+				clientX: e.clientX, clientY: e.clientY, startX: e.clientX, startY: e.clientY,
+				raf: requestAnimationFrame(selFrame),
+			};
+		});
+		pagesEl.addEventListener('pointermove', e => { if (sel && e.pointerId === sel.id) trackPointer(e); });
+		pagesEl.addEventListener('pointerup', e => {
+			if (!sel || e.pointerId !== sel.id) return;
+			trackPointer(e);
+			const s = sel;
+			if (!s) return;
+			cancelSel();
+			if (s.moved) commitSel(s);
+		});
+		pagesEl.addEventListener('pointercancel', e => { if (sel && e.pointerId === sel.id) cancelSel(); });
+
+		// 옮기던 선이 있으면 Escape는 그 선의 몫이다. 캡처 단계여야 그 처리가 끝나기 전에 알 수 있다
+		document.addEventListener('keydown', e => {
+			if (e.key === 'Shift' && sel) { sel.shift = true; followSel(); }
+			if (e.key !== 'Escape' || edit) return;
+			if (sel) cancelSel();
+			else if (previewTool) setTool(null);
+		}, true);
+		document.addEventListener('keyup', e => {
+			if (e.key === 'Shift' && sel) { sel.shift = false; followSel(); }
+		}, true);
+
+		// 끌다가 인쇄가 시작되면 선택을 버린다
+		window.addEventListener('beforeprint', cancelSel);
+
+		toolBand.addEventListener('click', () => setTool(previewTool === 'band' ? null : 'band'));
+		toolMask.addEventListener('click', () => setTool(previewTool === 'mask' ? null : 'mask'));
+
+		function markRow(text, action, label, remove) {
+			const row = document.createElement('li');
+			const name = document.createElement('span');
+			name.textContent = text;
+			const btn = document.createElement('button');
+			btn.type = 'button';
+			btn.textContent = action;
+			btn.setAttribute('aria-label', label);
+			btn.addEventListener('click', remove);
+			row.append(name, btn);
+			return row;
+		}
+
+		// 줄을 다시 만들어도 포커스는 같은 자리에 둔다. 지운 줄이면 다음 줄로, 목록이 비면 도구 단추로 간다
+		function fillList(list, rows, tool) {
+			const buttons = () => [...list.querySelectorAll('button')];
+			const focused = buttons().indexOf(document.activeElement);
+			list.replaceChildren(...rows);
+			if (focused < 0) return;
+			const now = buttons();
+			(now[Math.min(focused, now.length - 1)] || (tool.disabled ? fileInput : tool)).focus();
+		}
+
+		function refreshMarks() {
+			toolBand.disabled = toolMask.disabled = !doc;
+			for (const form of [bandForm, maskForm]) form.querySelector('button').disabled = !doc;
+			if (!doc && previewTool) setTool(null);
+			const bands = doc ? doc.bands : [], masks = doc ? doc.masks : [];
+			fillList(bandList, bands.map((b, i) => markRow(
+				`구간 ${i + 1}: 세로 ${b.y0}~${b.y1} (${b.y1 - b.y0}px)`, '되살리기', `구간 ${i + 1} 되살리기`,
+				() => mutateDoc('구간 되살리기', d => { d.bands = d.bands.filter(x => x.id !== b.id); })
+			)), toolBand);
+			fillList(maskList, masks.map((m, i) => markRow(
+				`가림 ${i + 1}: 가로 ${m.x}, 세로 ${m.y}, ${m.w}×${m.h}`, '지우기', `가림 ${i + 1} 지우기`,
+				() => mutateDoc('가림 지우기', d => { d.masks = d.masks.filter(x => x.id !== m.id); })
+			)), toolMask);
+			marksEmpty.hidden = bands.length + masks.length > 0;
+			marksSize.textContent = doc ? `지금 이미지는 가로 ${img.naturalWidth}, 세로 ${img.naturalHeight}픽셀입니다. 세로 끝 값은 그 줄 바로 앞까지 뺍니다.` : '이미지를 먼저 선택하세요.';
+		}
+
+		// 숫자 칸을 읽어 배열로 돌려준다. 비었거나 숫자가 아니면 안내하고 null
+		function formNumbers(form) {
+			const inputs = [...form.querySelectorAll('input')];
+			inputs.forEach(i => i.removeAttribute('aria-invalid'));
+			const bad = inputs.find(i => !Number.isFinite(i.valueAsNumber));
+			if (!bad) return inputs.map(i => i.valueAsNumber);
+			failForm(form, '숫자를 입력해 주세요.', bad);
+			return null;
+		}
+
+		function failForm(form, message, field) {
+			form.querySelector('.mark-error').textContent = message;
+			field.setAttribute('aria-invalid', 'true');
+			field.focus();
+		}
+
+		// 다음 항목을 바로 넣을 수 있게 칸을 비우고 첫 칸으로 돌아간다
+		function doneForm(form) {
+			form.querySelector('.mark-error').textContent = '';
+			form.reset();
+			form.querySelector('input').focus();
+		}
+
+		bandForm.addEventListener('submit', e => {
+			e.preventDefault();
+			const values = doc && formNumbers(bandForm);
+			if (!values) return;
+			const H = img.naturalHeight, [from, to] = bandForm.querySelectorAll('input');
+			const y0 = clamp(Math.floor(values[0]), 0, H), y1 = clamp(Math.ceil(values[1]), 0, H);
+			if (y1 <= y0) return failForm(bandForm, '끝은 시작보다 뒤여야 합니다.', to);
+			const message = addBand(y0, y1);
+			if (message) failForm(bandForm, message, from);
+			else doneForm(bandForm);
+		});
+
+		maskForm.addEventListener('submit', e => {
+			e.preventDefault();
+			const values = doc && formNumbers(maskForm);
+			if (!values) return;
+			const W = img.naturalWidth, H = img.naturalHeight, [xIn, yIn, wIn, hIn] = maskForm.querySelectorAll('input');
+			const [x, y, w, h] = values;
+			if (w <= 0) return failForm(maskForm, '너비는 0보다 커야 합니다.', wIn);
+			if (h <= 0) return failForm(maskForm, '높이는 0보다 커야 합니다.', hIn);
+			const left = clamp(Math.floor(x), 0, W), right = clamp(Math.ceil(x + w), 0, W);
+			const top = clamp(Math.floor(y), 0, H), bottom = clamp(Math.ceil(y + h), 0, H);
+			if (right <= left) return failForm(maskForm, '가로 위치가 이미지 밖입니다.', xIn);
+			if (bottom <= top) return failForm(maskForm, '세로 위치가 이미지 밖입니다.', yIn);
+			addMask(left, top, right - left, bottom - top);
+			doneForm(maskForm);
+		});
+
+		hooks.statusNotes.push(notes => {
+			if (doc.bands.length || doc.masks.length) notes.push(`빼낸 구간 ${doc.bands.length}, 가림 ${doc.masks.length}`);
+		});
+		hooks.afterRender.push(() => {
+			cancelSel(); // 페이지가 새로 만들어지면 시작점의 좌표가 무의미해진다
+			refreshMarks();
+		});
+
+		refreshMarks();
+		previewTools.hidden = false;
+	}
 	// ---------- 구간 빼기·가리기 끝 ----------
 
 	// ---------- 쪽 번호 ----------
@@ -1352,9 +1675,40 @@ document.addEventListener('DOMContentLoaded', function () {
 		</fieldset>
 
 		<!-- 구간 빼기·가리기: 목록 -->
+		<section id="marksSection" aria-labelledby="h-marks">
+			<h2 id="h-marks">3. 빼낸 구간·가린 곳</h2>
+			<p class="hint">미리보기 위의 <strong>구간 빼기</strong>나 <strong>가리기</strong>를 누르고 이미지에서 끌어 고릅니다. 가린 곳은 화면과 인쇄물의 픽셀 자체가 검게 칠해집니다.</p>
+			<p id="marksEmpty" class="hint">아직 빼낸 구간이나 가린 곳이 없습니다.</p>
+			<ul id="bandList" class="mark-list" aria-label="빼낸 구간"></ul>
+			<ul id="maskList" class="mark-list" aria-label="가린 곳"></ul>
+			<details class="mark-forms">
+				<summary>숫자로 입력</summary>
+				<p id="marksSize" class="hint"></p>
+				<form id="bandForm" novalidate aria-labelledby="h-bandForm">
+					<h3 id="h-bandForm">구간 빼기 (원본 픽셀)</h3>
+					<div class="mark-fields">
+						<div class="field stack"><label for="bandFrom">시작 세로</label><input type="number" id="bandFrom" min="0" step="1" inputmode="numeric"></div>
+						<div class="field stack"><label for="bandTo">끝 세로</label><input type="number" id="bandTo" min="0" step="1" inputmode="numeric"></div>
+					</div>
+					<p class="mark-error" role="alert"></p>
+					<button type="submit" class="secondary" disabled>구간 빼기</button>
+				</form>
+				<form id="maskForm" novalidate aria-labelledby="h-maskForm">
+					<h3 id="h-maskForm">가리기 (원본 픽셀)</h3>
+					<div class="mark-fields">
+						<div class="field stack"><label for="maskX">가로 위치</label><input type="number" id="maskX" min="0" step="1" inputmode="numeric"></div>
+						<div class="field stack"><label for="maskY">세로 위치</label><input type="number" id="maskY" min="0" step="1" inputmode="numeric"></div>
+						<div class="field stack"><label for="maskW">너비</label><input type="number" id="maskW" min="1" step="1" inputmode="numeric"></div>
+						<div class="field stack"><label for="maskH">높이</label><input type="number" id="maskH" min="1" step="1" inputmode="numeric"></div>
+					</div>
+					<p class="mark-error" role="alert"></p>
+					<button type="submit" class="secondary" disabled>가리기</button>
+				</form>
+			</details>
+		</section>
 
 		<section aria-labelledby="h-print">
-			<h2 id="h-print">3. 인쇄</h2>
+			<h2 id="h-print">4. 인쇄</h2>
 			<button type="button" id="print" disabled>인쇄</button>
 			<p class="hint"><kbd>Ctrl</kbd>+<kbd>P</kbd>(맥은 <kbd>⌘</kbd>+<kbd>P</kbd>)로도 인쇄할 수 있습니다.</p>
 			<p id="status" role="status" aria-live="polite"></p>
@@ -1370,6 +1724,9 @@ document.addEventListener('DOMContentLoaded', function () {
 			<div id="undoTools">
 			</div>
 			<div id="markTools">
+				<button type="button" id="toolBand" aria-pressed="false" disabled title="미리보기에서 위아래로 끌어 그 구간을 뺍니다">구간 빼기</button>
+				<button type="button" id="toolMask" aria-pressed="false" disabled title="미리보기에서 끌어 그 사각형을 검게 가립니다">가리기</button>
+				<span id="markHint" class="hint" aria-live="polite"></span>
 			</div>
 		</div>
 		<div id="pages"></div>
