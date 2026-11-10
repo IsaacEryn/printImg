@@ -301,6 +301,24 @@
 	/* ---------- 쪽 번호 끝 ---------- */
 
 	/* ---------- 여러 이미지 ---------- */
+	#docList { list-style: none; margin: 8px 0 0; padding: 0; }
+	.doc-row { display: flex; align-items: flex-start; gap: 4px; margin-bottom: 4px; }
+	.doc-row button {
+		flex: none; width: auto; min-width: 28px; min-height: 28px; padding: 2px 4px;
+		font-size: 13px; line-height: 1.4;
+		color: var(--accent); background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+	}
+	.doc-row button:disabled { color: var(--muted); background: var(--bg); }
+	/* 긴 파일 이름은 칸 안에서 줄을 바꾼다. 320px에서 가로 스크롤이 생기면 안 된다 */
+	.doc-row .doc-pick { flex: 1 1 0; min-width: 0; padding: 2px 6px; text-align: left; font-weight: 400; color: var(--text); overflow-wrap: anywhere; }
+	.doc-row .doc-pick[aria-current] { font-weight: 600; color: #fff; background: var(--accent); border-color: var(--accent); }
+	/* 여러 장을 인쇄할 때만 채워지는 자리 */
+	#printPages { display: none; }
+	@media print {
+		#docList, #clearDocs { display: none !important; }
+		.printing-job #pages { display: none !important; }
+		.printing-job #printPages { display: block; }
+	}
 	/* ---------- 여러 이미지 끝 ---------- */
 
 	/* ---------- 설정 기억 ---------- */
@@ -500,9 +518,22 @@ document.addEventListener('DOMContentLoaded', function () {
 		return { segs: segments(docH(), pageH, smartBox.checked), pageH, dispW, scale, renderW };
 	}
 
-	// 페이지 번호. .num과 인쇄되는 쪽 번호가 같이 쓴다
+	// 페이지 번호. .num과 인쇄되는 쪽 번호가 같이 쓴다. 번호는 작업 전체에 걸쳐 이어진다.
+	// 문서마다 쪽 수를 d.pageCount에 기억해 두고, 여백·옵션·내용이 바뀐 문서만 다시 센다.
 	function pageNumberOf(idx, count) {
-		return { n: idx + 1, total: count };
+		const m = marginMm(), options = `${m}|${keepBox.checked}|${smartBox.checked}`;
+		let n = idx + 1, total = 0, before = true;
+		for (const d of docs) {
+			const key = `${options}|${d.rev}`;
+			if (d.pageCountKey !== key) {
+				d.pageCount = d === doc ? count : withDoc(d, () => computeView(m).segs.length);
+				d.pageCountKey = key;
+			}
+			if (d === doc) before = false;
+			else if (before) n += d.pageCount;
+			total += d.pageCount;
+		}
+		return { n, total };
 	}
 
 	// ---------- 배경색 처리 ----------
@@ -1296,9 +1327,10 @@ document.addEventListener('DOMContentLoaded', function () {
 		render();
 	}
 
-	function openDoc(d) {
-		docs = [d];
-		activateDoc(d);
+	// 문서들을 작업 끝에 덧붙이고 그중 첫 문서를 미리보기에 올린다
+	function openDoc(...added) {
+		docs.push(...added);
+		activateDoc(added[0]);
 	}
 
 	// 문서가 하나도 없는 화면으로
@@ -1313,59 +1345,73 @@ document.addEventListener('DOMContentLoaded', function () {
 		runHooks('afterRender');
 	}
 
-	// File 객체 하나를 읽어 미리보기까지 그린다. 파일 선택·붙여넣기·끌어놓기가 모두 이 함수를 쓴다.
+	let loadQueue = Promise.resolve(); // 먼저 넣은 묶음이 먼저 붙도록 줄을 세운다
+
+	// 파일 하나를 Image로 읽는다. 열 수 없으면 null
+	function decodeImage(file) {
+		return new Promise(resolve => {
+			const url = URL.createObjectURL(file);
+			const im = new Image();
+			const done = ok => {
+				URL.revokeObjectURL(url);
+				resolve(ok ? im : null);
+			};
+			im.onload = () => done(im.naturalWidth > 0 && im.naturalHeight > 0);
+			im.onerror = () => done(false);
+			im.src = url;
+		});
+	}
+
+	// items = [{ file, name }]을 읽어 작업 끝에 덧붙인다. 파일 선택·붙여넣기·끌어놓기가 모두 이 함수를 쓴다.
 	// name은 화면·문서 제목에 쓸 이름 (붙여넣기는 브라우저가 "image.png"로 주므로 따로 받는다).
-	function loadFile(file, name) {
-		const seq = ++loadSeq;
-		const url = URL.createObjectURL(file);
-		fileInfo.textContent = `${name} · 불러오는 중…`;
+	// 파일마다 끝나는 시간이 달라도 고른 순서대로 놓이도록 모두 읽은 뒤에 넣는다. 열지 못한 파일은 이름을 알리고 나머지는 넣는다.
+	function loadFiles(items) {
+		const seq = loadSeq;
+		fileInfo.textContent = items.length > 1 ? `이미지 ${items.length}개 · 불러오는 중…` : `${items[0].name} · 불러오는 중…`;
 		errorEl.textContent = '';
 
-		const im = new Image();
-		im.onload = () => {
-			URL.revokeObjectURL(url);
-			if (seq !== loadSeq) return; // 그 사이 다른 파일을 골랐으면 무시
-			openDoc(newDoc(im, name));
-		};
-		im.onerror = () => {
-			URL.revokeObjectURL(url);
-			if (seq !== loadSeq) return;
-			showEmpty();
-			fileInfo.textContent = name;
-			errorEl.textContent = `이미지를 열 수 없습니다: ${name}`;
-		};
-		im.src = url;
+		const decoded = Promise.all(items.map(it => decodeImage(it.file)));
+		const finish = () => decoded.then(images => {
+			if (seq !== loadSeq) return; // 그 사이 모두 비웠으면 버린다
+			const onPage = pagesEl.contains(document.activeElement); // 있던 선이 사라지므로 포커스를 옮겨 둔다
+			const added = items.flatMap((it, i) => images[i] ? [newDoc(images[i], it.name)] : []);
+			const failed = items.filter((it, i) => !images[i]).map(it => it.name).join(', ');
+			if (added.length) openDoc(...added);
+			else if (doc) activateDoc(doc); // 하나도 못 열었으면 파일 정보만 되돌린다
+			else fileInfo.textContent = failed;
+			if (failed) errorEl.textContent = `이미지를 열 수 없습니다: ${failed}`;
+			if (onPage) document.querySelector('#docList [aria-current]').focus();
+		});
+		loadQueue = loadQueue.then(finish, finish);
 	}
+
+	const namedFiles = files => files.map(file => ({ file, name: file.name }));
 
 	fileInput.addEventListener('change', () => {
-		const file = fileInput.files[0];
+		const files = [...fileInput.files];
 		fileInput.value = ''; // 같은 파일을 다시 골라도 change가 나도록 비움
-		if (file) loadFile(file, file.name);
+		if (files.length) loadFiles(namedFiles(files));
 	});
 
-	// 클립보드·끌어놓기에서 이미지 파일 하나를 고른다. 없으면 null.
-	function imageFileFrom(dataTransfer) {
-		if (!dataTransfer) return null;
-		return [...dataTransfer.files].find(f => f.type.startsWith('image/')) || null;
-	}
 	function stampName(prefix) {
 		const d = new Date(), z = n => String(n).padStart(2, '0');
 		return `${prefix} ${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}-${z(d.getMinutes())}`;
 	}
 	// 복사한 이미지를 Ctrl+V / ⌘+V로 붙여넣기. 이미지가 없으면 손대지 않아 입력칸의 글자 붙여넣기는 그대로다.
 	document.addEventListener('paste', e => {
-		const file = imageFileFrom(e.clipboardData);
-		if (!file) return;
+		const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+		if (!files.length) return;
 		e.preventDefault();
-		loadFile(file, stampName('붙여넣기'));
+		const stamp = stampName('붙여넣기');
+		loadFiles(files.map((file, i) => ({ file, name: i ? `${stamp} (${i + 1})` : stamp })));
 	});
-	// 이미지 파일을 창 어디에나 끌어다 놓기
-	document.addEventListener('dragover', e => { if (imageFileFrom(e.dataTransfer) || [...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); });
+	// 이미지 파일을 창 어디에나 끌어다 놓기. 이미지가 아닌 파일은 브라우저가 열어 버리지 않게 받아서 #error에 이름을 알린다
+	document.addEventListener('dragover', e => { if ([...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); });
 	document.addEventListener('drop', e => {
-		const file = imageFileFrom(e.dataTransfer);
-		if (!file) return;
+		const files = [...e.dataTransfer.files];
+		if (!files.length) return;
 		e.preventDefault();
-		loadFile(file, file.name);
+		loadFiles(namedFiles(files));
 	});
 
 	keepBox.addEventListener('change', render);
@@ -1842,6 +1888,156 @@ document.addEventListener('DOMContentLoaded', function () {
 	// ---------- 쪽 번호 끝 ----------
 
 	// ---------- 여러 이미지 ----------
+	// 미리보기에는 활성 문서만 올리고 페이지 캔버스도 그 문서만 가진다. 나머지 문서는 Image와 편집 값뿐이다.
+	{
+		const docListEl    = document.getElementById('docList');
+		const clearDocsBtn = document.getElementById('clearDocs');
+		const printPagesEl = document.getElementById('printPages');
+		const emptyInfo  = fileInfo.textContent, emptyTitle = document.title;
+		const panelFixed = window.matchMedia('(min-width: 900px)'); // 패널이 옆에 고정되는 배치
+		let shownId = null; // 마지막으로 미리보기에 올린 문서
+
+		function rowButton(act, text, label) {
+			const b = document.createElement('button');
+			b.type = 'button';
+			b.dataset.act = act;
+			b.textContent = text;
+			if (label) {
+				b.setAttribute('aria-label', label);
+				b.title = label;
+			}
+			return b;
+		}
+
+		// 축소 그림은 넣지 않는다. 가리기를 건너뛰고 메모리도 쓰기 때문이다
+		function makeRow(d, i) {
+			const li = document.createElement('li');
+			li.className = 'doc-row';
+			li.dataset.id = d.id;
+			const pick = rowButton('pick', `${i + 1}. ${d.name} · ${d.pageCount}쪽`);
+			pick.className = 'doc-pick';
+			if (d === doc) pick.setAttribute('aria-current', 'true');
+			const up = rowButton('up', '▲', `${d.name} 위로 옮기기`);
+			const down = rowButton('down', '▼', `${d.name} 아래로 옮기기`);
+			const remove = rowButton('remove', '✕', `${d.name} 목록에서 빼기`);
+			up.disabled = i === 0;
+			down.disabled = i === docs.length - 1;
+			li.append(pick, up, down, remove);
+			return li;
+		}
+
+		// 목록을 다시 만든다. 목록 안에 있던 포커스는 같은 문서의 같은 버튼으로 돌려놓는다.
+		// 맨 위·맨 아래로 가서 누른 버튼이 잠기면 반대 방향 버튼으로 간다.
+		function drawDocList() {
+			const active = document.activeElement;
+			const focused = docListEl.contains(active) ? { id: active.closest('li').dataset.id, act: active.dataset.act } : null;
+			docListEl.replaceChildren(...docs.map(makeRow));
+			docListEl.hidden = clearDocsBtn.hidden = !docs.length;
+			const row = focused && docListEl.querySelector(`li[data-id="${focused.id}"]`);
+			if (!row) return;
+			const order = [focused.act, focused.act === 'up' ? 'down' : 'up', 'pick'];
+			order.map(act => row.querySelector(`[data-act="${act}"]:enabled`)).find(Boolean).focus();
+		}
+
+		function jobTitle() {
+			if (!docs.length) return emptyTitle;
+			const first = docs[0].name.replace(/\.[^.]+$/, '');
+			return docs.length > 1 ? `${first} 외 ${docs.length - 1}개 — PrintImg` : `${first} — PrintImg`;
+		}
+
+		// 처음 화면으로. 포커스를 받던 버튼이 사라지므로 파일 선택으로 옮긴다
+		function resetJob() {
+			showEmpty();
+			fileInfo.textContent = emptyInfo;
+			errorEl.textContent = '';
+			bgPick.value = bgPick.defaultValue;
+			fileInput.focus();
+		}
+
+		function moveDoc(d, delta) {
+			const i = docs.indexOf(d), j = i + delta;
+			if (j < 0 || j >= docs.length) return;
+			docs.splice(i, 1);
+			docs.splice(j, 0, d);
+			renderKeepFocus(); // 작업 전체 번호가 바뀌므로 다시 그린다
+		}
+
+		function removeDoc(d) {
+			const i = docs.indexOf(d);
+			docs.splice(i, 1);
+			if (!docs.length) return resetJob();
+			const next = docs[Math.min(i, docs.length - 1)];
+			if (d === doc) activateDoc(next);
+			else renderKeepFocus();
+			docListEl.querySelector(`li[data-id="${next.id}"] .doc-pick`).focus();
+		}
+
+		docListEl.addEventListener('click', e => {
+			const btn = e.target.closest('button');
+			if (!btn) return;
+			const { act } = btn.dataset, id = Number(btn.closest('li').dataset.id); // 확정하면 목록이 다시 만들어지므로 먼저 읽어 둔다
+			settleEdit();
+			const d = docs.find(x => x.id === id);
+			if (act === 'remove') removeDoc(d);
+			else if (act === 'pick') { if (d !== doc) activateDoc(d); }
+			else moveDoc(d, act === 'up' ? -1 : 1);
+		});
+
+		clearDocsBtn.addEventListener('click', () => {
+			loadSeq++; // 아직 읽는 중인 묶음은 버린다
+			resetJob();
+		});
+
+		hooks.statusNotes.push(notes => {
+			if (docs.length > 1) notes.push(`전체 ${docs.reduce((sum, d) => sum + d.pageCount, 0)}페이지`);
+		});
+
+		hooks.afterRender.push(() => {
+			drawDocList();
+			document.title = jobTitle();
+			// 다른 문서로 바뀌면 앞 문서를 보던 깊이에 머물지 않게 한다. 좁은 화면은 위에 있는 목록을 떠나지 않도록 그대로 둔다
+			if (doc && doc.id !== shownId && panelFixed.matches) window.scrollTo(0, 0);
+			shownId = doc ? doc.id : null;
+		});
+
+		// 인쇄용 캔버스는 큼직하므로 인쇄가 끝나면 바로 돌려준다
+		function releasePrintPages() {
+			for (const c of printPagesEl.querySelectorAll('canvas')) c.width = c.height = 0;
+			printPagesEl.replaceChildren();
+			document.documentElement.classList.remove('printing-job');
+		}
+
+		// 화면에 한 번도 그려지지 않은 캔버스는 Chrome이 그리기 명령째로 PDF에 넣는다. 그러면 가린 자리 밑에 원본 픽셀이 남고 크기도 조금 줄어든다.
+		// 전체를 다시 써서 픽셀로 굳힌다 (한 칸만 읽거나 willReadFrequently를 켜는 것으로는 막지 못했다). 인쇄 직전에 다시 그린 #pages도 마찬가지다.
+		function bakePixels(canvas) {
+			const ctx = canvas.getContext('2d');
+			try {
+				ctx.putImageData(ctx.getImageData(0, 0, canvas.width, canvas.height), 0, 0);
+			} catch (e) {
+				pixelReadFailed = true;
+			}
+		}
+
+		// 문서가 둘 이상이면 목록 순서대로 전부 #printPages에 만들어 인쇄한다. 문서 하나는 #pages를 그대로 인쇄한다.
+		// 앞서 등록된 beforeprint가 옮기던 선을 확정한 뒤에 실행된다.
+		window.addEventListener('beforeprint', () => {
+			releasePrintPages();
+			if (docs.length > 1) {
+				const m = applyMargin();
+				const pages = [];
+				for (const d of docs) {
+					withDoc(d, () => {
+						view = computeView(m);
+						view.segs.forEach((seg, i, segs) => pages.push(makePage(seg, i, segs.length)));
+					});
+				}
+				printPagesEl.replaceChildren(...pages);
+				document.documentElement.classList.add('printing-job');
+			}
+			(docs.length > 1 ? printPagesEl : pagesEl).querySelectorAll('canvas').forEach(bakePixels);
+		});
+		window.addEventListener('afterprint', releasePrintPages);
+	}
 	// ---------- 여러 이미지 끝 ----------
 
 	// ---------- 설정 기억 ----------
@@ -1906,11 +2102,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
 		<section aria-labelledby="h-file">
 			<h2 id="h-file">1. 이미지 선택</h2>
-			<label for="file" class="hint" style="margin:0 0 6px">PNG, JPG, BMP, GIF, WEBP</label>
-			<input type="file" id="file" accept="image/png,image/jpeg,image/bmp,image/gif,image/webp">
+			<label for="file" class="hint" style="margin:0 0 6px">PNG, JPG, BMP, GIF, WEBP (여러 개를 한꺼번에 고를 수 있음)</label>
+			<input type="file" id="file" multiple accept="image/png,image/jpeg,image/bmp,image/gif,image/webp">
 			<p id="fileInfo" aria-live="polite">선택된 파일 없음</p>
 			<!-- 여러 이미지: 목록 -->
-			<p class="hint">복사한 이미지를 <kbd>Ctrl</kbd>+<kbd>V</kbd>(맥은 <kbd>⌘</kbd>+<kbd>V</kbd>)로 붙여 넣거나, 파일을 창에 끌어다 놓아도 됩니다.</p>
+			<ol id="docList" aria-label="인쇄할 이미지 목록" hidden></ol>
+			<button type="button" id="clearDocs" class="secondary" hidden>모두 비우기</button>
+			<p class="hint">복사한 이미지를 <kbd>Ctrl</kbd>+<kbd>V</kbd>(맥은 <kbd>⌘</kbd>+<kbd>V</kbd>)로 붙여 넣거나, 파일을 창에 끌어다 놓아도 됩니다. 새 이미지는 목록 끝에 붙고, 목록 순서대로 한 PDF로 인쇄됩니다.</p>
 		</section>
 
 		<fieldset>
@@ -2009,6 +2207,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		</div>
 		<div id="pages"></div>
 		<!-- 여러 이미지: 인쇄용 -->
+		<div id="printPages"></div>
 		<div id="loupe" aria-hidden="true" hidden><canvas></canvas><span></span></div>
 	</main>
 </div>
