@@ -219,11 +219,15 @@ document.addEventListener('DOMContentLoaded', function () {
 	const FINE_DRAG_RATIO = 0.2;  // Shift를 누르고 끌 때의 속도
 
 	// 자석: 색 경계 판정 (실제 캡처로 맞춘 값)
-	const SNAP_RADIUS_PX  = 8;    // 화면에서 이 거리 안의 경계에 붙는다
+	const SNAP_RADIUS_PX  = 5;    // 끌 때 화면에서 이 거리 안의 지점에 붙는다
+	const SNAP_GAP_PX     = 12;   // 끌 때 붙는 빈 구간: 화면에서 이 높이 이상이거나
+	const SNAP_BLOCK_PX   = 40;   // 위아래 내용 덩어리 중 하나가 이 높이 이상. 글줄 사이의 좁은 틈을 빼기 위한 값
 	const EDGE_SAMPLE_W   = 512;  // 판정에 쓰는 표본 폭. 가로로 평균되어 잡음에 강해진다
 	const EDGE_DELTA      = 6;    // 윗줄과 채널 차이가 이보다 크면 바뀐 칸
 	const EDGE_MIN_RATIO  = 0.3;  // 바뀐 칸이 폭의 이 비율 이상이면 색 경계 (가운데 놓인 카드도 잡히는 값)
+	const EDGE_BOLD_RATIO = 0.6;  // 바뀐 칸이 폭의 이 비율 이상이면 뚜렷한 경계. 끌 때 붙는 색 경계는 이것뿐이다
 	const EDGE_MAX_RUN    = 4;    // 이보다 길게 이어지면 사진·무늬로 보고 제외
+	const EDGE_ANY = 1, EDGE_BOLD = 2; // edgeRows() 결과의 비트
 
 	// 돋보기
 	const LOUPE_ZOOM      = 5;    // 미리보기 대비 배율
@@ -409,7 +413,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		return out;
 	}
 
-	// 원본의 [y0, y1) 구간에서 색 경계인 줄을 Uint8Array(1=경계)로 돌려줌. 경계 = 폭의 상당 부분이 윗줄과 색이 다른 줄.
+	// 원본의 [y0, y1) 구간에서 색 경계인 줄을 Uint8Array(EDGE_ANY·EDGE_BOLD 비트)로 돌려줌. 경계 = 폭의 상당 부분이 윗줄과 색이 다른 줄.
 	// 정확한 줄을 찾아야 하므로 세로는 1:1로 두고 가로만 줄여 읽는다.
 	function edgeRows(y0, y1) {
 		const out = new Uint8Array(y1 - y0);
@@ -428,23 +432,28 @@ document.addEventListener('DOMContentLoaded', function () {
 			pixelReadFailed = true;
 			return out;
 		}
-		const need = Math.ceil(w * EDGE_MIN_RATIO);
+		const counts = new Uint16Array(out.length); // 줄마다 윗줄과 색이 다른 칸 수
 		for (let row = 1; row < h; row++) {
 			let changed = 0;
 			for (let i = row * w * 4, end = i + w * 4; i < end; i += 4) {
 				const j = i - w * 4;
 				if (Math.abs(d[i] - d[j]) > EDGE_DELTA || Math.abs(d[i + 1] - d[j + 1]) > EDGE_DELTA || Math.abs(d[i + 2] - d[j + 2]) > EDGE_DELTA) changed++;
 			}
-			if (changed >= need) out[row + from - y0] = 1;
+			counts[row + from - y0] = changed;
 		}
 		// 짧게 끝나는 변화만 경계로 남기고 그 첫 줄을 쓴다. 길게 이어지면 사진·무늬다.
-		for (let i = 0; i < out.length;) {
-			if (!out[i]) { i++; continue; }
-			let j = i + 1;
-			while (j < out.length && out[j]) out[j++] = 0;
-			if (j - i > EDGE_MAX_RUN) out[i] = 0;
-			i = j;
-		}
+		const mark = (ratio, bit) => {
+			const need = Math.ceil(w * ratio);
+			for (let i = 0; i < counts.length;) {
+				if (counts[i] < need) { i++; continue; }
+				let j = i + 1;
+				while (j < counts.length && counts[j] >= need) j++;
+				if (j - i <= EDGE_MAX_RUN) out[i] |= bit;
+				i = j;
+			}
+		};
+		mark(EDGE_MIN_RATIO, EDGE_ANY);
+		mark(EDGE_BOLD_RATIO, EDGE_BOLD);
 		return out;
 	}
 
@@ -456,7 +465,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		return blankRows(y - 1, y + 1).some(v => v) ? 'blank' : null;
 	}
 
-	// 선이 붙을 지점(원본 y) 오름차순: 색 경계, 그리고 빈 줄과 내용이 바뀌는 줄. blank·edge는 y0부터의 줄 배열
+	// 모든 경계(원본 y) 오름차순: 색 경계, 그리고 빈 줄과 내용이 바뀌는 줄. 키보드와 Shift 끌기에서 쓴다. blank·edge는 y0부터의 줄 배열
 	function snapTargets(y0, blank, edge, min, max) {
 		const out = [];
 		for (let i = 1; i < blank.length; i++) {
@@ -464,6 +473,32 @@ document.addEventListener('DOMContentLoaded', function () {
 			if (y >= min && y <= max && (edge[i] || blank[i] !== blank[i - 1])) out.push(y);
 		}
 		return out;
+	}
+
+	// 끌 때 선이 붙는 지점(원본 y) 오름차순. 빈 구간마다 다음 내용이 시작되는 줄 하나만 쓰고, 글줄 사이처럼 작은 틈은 뺀다.
+	// 그 지점들과 떨어져 있는 뚜렷한 색 경계도 붙는다. srcPerPx: 화면 1px에 해당하는 원본 줄 수
+	function magnetPoints(y0, blank, edge, min, max, srcPerPx) {
+		const gapMin = Math.round(SNAP_GAP_PX * srcPerPx), blockMin = Math.round(SNAP_BLOCK_PX * srcPerPx);
+		const apart = 2 * SNAP_RADIUS_PX * srcPerPx;
+		const rows = [];
+		let prevEnd = 0; // 바로 위 빈 구간이 끝난 줄
+		for (let i = 0; i < blank.length;) {
+			if (!blank[i]) { i++; continue; }
+			let end = i + 1;
+			while (end < blank.length && blank[end]) end++;
+			let next = end; // 다음 빈 구간이 시작되는 줄
+			while (next < blank.length && !blank[next]) next++;
+			if (end < blank.length && (end - i >= gapMin || Math.max(i - prevEnd, next - end) >= blockMin)) rows.push(end);
+			prevEnd = end;
+			i = next;
+		}
+		const bold = [];
+		for (let i = 1; i < edge.length; i++) if (edge[i] & EDGE_BOLD) bold.push(i);
+		bold.forEach((row, k) => {
+			const room = Math.max(row - (bold[k - 1] ?? 0), (bold[k + 1] ?? edge.length) - row); // 표 줄무늬처럼 양쪽이 다 촘촘하면 뺀다
+			if (room >= blockMin && !rows.some(r => Math.abs(r - row) < apart)) rows.push(row);
+		});
+		return rows.map(i => y0 + i).filter(y => y >= min && y <= max).sort((a, b) => a - b);
 	}
 
 	// 분할 위치 결정 → [{y0, y1, smart, manual, boundary}]
@@ -657,20 +692,26 @@ document.addEventListener('DOMContentLoaded', function () {
 		const range = cutRange(seg);
 		const scanEnd = Math.min(end + 1, img.naturalHeight);
 		const blank = blankRows(seg.y0, scanEnd), edge = edgeRows(seg.y0, scanEnd);
+		const srcPerPx = (end - seg.y0) / canvas.getBoundingClientRect().height;
 		edit = {
 			index, seg, end, canvas, veil, cut, ...range, y: seg.y1, drag: null,
-			blank, edge, targets: snapTargets(seg.y0, blank, edge, range.min, range.max),
+			blank, edge,
+			targets: snapTargets(seg.y0, blank, edge, range.min, range.max),
+			magnets: magnetPoints(seg.y0, blank, edge, range.min, range.max, srcPerPx),
 		};
 		showLoupe();
 		placeEdit(seg.y1);
 		return edit;
 	}
 
+	// 지금 입력에서 선이 머무는 지점: 보통 끌기는 뚜렷한 경계만, 키보드와 Shift 끌기는 모든 경계
+	const stopPoints = e => e.drag && !e.drag.fine ? e.magnets : e.targets;
+
 	function placeEdit(y) {
 		const e = edit;
 		e.y = Math.round(Math.min(e.max, Math.max(e.min, y)));
 		e.cut.style.top = e.veil.style.top = `${(e.y - e.seg.y0) / (e.end - e.seg.y0) * 100}%`;
-		e.cut.classList.toggle('snapped', e.targets.includes(e.y));
+		e.cut.classList.toggle('snapped', stopPoints(e).includes(e.y));
 		const i = e.y - e.seg.y0;
 		const boundary = e.edge[i] ? 'edge' : (e.blank[i] || e.blank[i - 1]) ? 'blank' : null;
 		showCut(e.cut, cutKind(e.y === e.seg.y1 ? e.seg : { manual: true, boundary }), e.y);
@@ -707,15 +748,16 @@ document.addEventListener('DOMContentLoaded', function () {
 		ctx.fillStyle = 'rgba(255,255,255,.45)'; // 선 아래는 다음 장으로 넘어가는 부분
 		ctx.fillRect(0, mid, cw, ch - mid);
 
-		// 자석 지점은 양쪽 끝의 눈금으로
+		// 선이 머무는 지점은 양쪽 끝의 눈금으로
+		const stops = stopPoints(e);
 		ctx.fillStyle = cssVar('--snap');
-		for (const y of e.targets) {
+		for (const y of stops) {
 			const dy = Math.round((y - sy) * zoom * dpr);
 			if (dy < 0 || dy > ch) continue;
 			ctx.fillRect(0, dy, 12 * dpr, 2 * dpr);
 			ctx.fillRect(cw - 12 * dpr, dy, 12 * dpr, 2 * dpr);
 		}
-		if (!e.targets.includes(e.y)) ctx.fillStyle = cssVar('--danger');
+		if (!stops.includes(e.y)) ctx.fillStyle = cssVar('--danger');
 		ctx.fillRect(0, mid, cw, Math.max(1, Math.round(dpr)));
 
 		loupeLabel.textContent = (e.drag?.fine ? '정밀 이동 · ' : '') + e.cut.querySelector('.cut-label').textContent;
@@ -783,7 +825,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		return best;
 	}
 
-	// 지금 위치에서 위(-1)·아래(1)로 다음 자석 지점. 없으면 제자리
+	// 지금 위치에서 위(-1)·아래(1)로 다음 경계. 없으면 제자리
 	function snapFrom(e, dir) {
 		const list = dir < 0 ? [...e.targets].reverse() : e.targets;
 		return list.find(y => (y - e.y) * dir > 0) ?? e.y;
@@ -796,7 +838,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (d.moved) {
 			const srcPerPx = (e.end - e.seg.y0) / r.height;
 			const raw = d.base + (d.clientY - r.top - d.baseP) * srcPerPx * (d.fine ? FINE_DRAG_RATIO : 1);
-			y = (d.fine ? null : nearestSnap(e.targets, raw, SNAP_RADIUS_PX * srcPerPx)) ?? raw;
+			y = (d.fine ? null : nearestSnap(e.magnets, raw, SNAP_RADIUS_PX * srcPerPx)) ?? raw;
 		}
 		placeEdit(y);
 	}
@@ -867,7 +909,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); stopEdit(); clearManualCut(index); return; }
 		const big = mmToSrc(KEY_BIG_STEP_MM);
 		const step = e.shiftKey ? mmToSrc(KEY_STEP_MM) : 1;
-		const jump = e.ctrlKey || e.metaKey; // Ctrl(맥은 ⌘)+방향키: 다음 자석 지점으로
+		const jump = e.ctrlKey || e.metaKey; // Ctrl(맥은 ⌘)+방향키: 다음 경계로
 		const moves = {
 			ArrowUp: ed => jump ? snapFrom(ed, -1) : ed.y - step,
 			ArrowDown: ed => jump ? snapFrom(ed, 1) : ed.y + step,
@@ -1002,7 +1044,7 @@ document.addEventListener('DOMContentLoaded', function () {
 				<input type="checkbox" id="smart" checked>
 				<label for="smart">빈 줄에 맞춰 자르기</label>
 			</div>
-			<p class="hint">미리보기의 빨간 선을 위아래로 끌면 페이지마다 자를 위치를 바꿀 수 있습니다. 색이 바뀌는 곳이나 내용의 위아래 끝에 선이 자석처럼 붙고, <kbd>Shift</kbd>를 누른 채 끌면 자석 없이 천천히 움직입니다.</p>
+			<p class="hint">미리보기의 빨간 선을 위아래로 끌면 페이지마다 자를 위치를 바꿀 수 있습니다. 색이 뚜렷하게 바뀌는 곳이나 카드·문단이 시작되는 곳에 선이 자석처럼 붙고, <kbd>Shift</kbd>를 누른 채 끌면 자석 없이 천천히 움직입니다.</p>
 			<p class="hint">선을 선택한 뒤 <kbd>↑</kbd> <kbd>↓</kbd>로 1픽셀씩, <kbd>Ctrl</kbd>(맥은 <kbd>⌘</kbd>)+<kbd>↑</kbd> <kbd>↓</kbd>로 다음 경계까지 옮길 수 있습니다.</p>
 			<button type="button" id="resetCuts" class="secondary" hidden>직접 옮긴 선 모두 되돌리기</button>
 			<div class="field">
