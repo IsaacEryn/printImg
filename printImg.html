@@ -25,6 +25,7 @@
 		--muted: #5a5a63;   /* 흰 배경 대비 6.5:1 */
 		--accent: #1a5fb4;  /* 흰 배경 대비 6.3:1 */
 		--danger: #b3261e;  /* 흰 배경 대비 5.9:1 */
+		--snap: #0b7a3b;    /* 흰 배경 대비 5.4:1. 선이 경계에 붙었을 때 */
 		--focus: #005fcc;
 	}
 	* { box-sizing: border-box; }
@@ -90,6 +91,8 @@
 
 	/* ---------- 미리보기 ---------- */
 	.preview { padding: 20px 16px; min-width: 0; }
+	/* 선을 옮길 때 캔버스가 펼쳐지면 브라우저의 스크롤 고정이 화면을 그만큼 밀어 버린다. 페이지 높이는 고정이라 필요 없다 */
+	#pages { overflow-anchor: none; }
 	#pages:empty::after {
 		content: "왼쪽에서 이미지를 선택하면 여기에 페이지 미리보기가 나타납니다.";
 		display: block; padding: 40px 20px; text-align: center; color: var(--muted);
@@ -133,6 +136,10 @@
 	}
 	.page .grip::before { top: 5px; }
 	.page .grip::after { top: 9px; }
+	/* 경계에 붙은 선: 색만으로 구분하지 않도록 실선으로 바꾸고 옆 글자에도 종류를 적는다 */
+	.page .cut.snapped .cut-handle::before { border-top: 2px solid var(--snap); }
+	.page .cut.snapped .grip { background: var(--snap); }
+	.page .cut.snapped .cut-tools { color: var(--snap); }
 	.page .cut-tools {
 		position: absolute; right: 4px; bottom: 14px; max-width: calc(100% - 8px);
 		display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px;
@@ -157,11 +164,24 @@
 		padding: 2px 8px; border-radius: 4px; white-space: nowrap;
 		font-size: 12px; color: var(--muted); background: #fff;
 	}
+	/* 돋보기: 선을 옮기는 동안 선 주변을 확대해 보여 준다. 위치는 updateLoupe()가 정한다 */
+	#loupe {
+		position: fixed; left: 0; top: 0; z-index: 10;
+		width: min(360px, calc(100vw - 16px)); height: 200px;
+		overflow: hidden; border: 2px solid var(--text); border-radius: 8px;
+		background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.35);
+		pointer-events: none;
+	}
+	#loupe canvas { display: block; width: 100%; height: 100%; }
+	#loupe span {
+		position: absolute; left: 6px; bottom: 4px; padding: 1px 6px; border-radius: 4px;
+		font-size: 12px; color: var(--text); background: rgba(255,255,255,.92);
+	}
 
 	/* ---------- 인쇄 시 ---------- */
 	@media print {
 		body { background: #fff; }
-		.panel, .num, .cut, .veil { display: none !important; }
+		.panel, .num, .cut, .veil, #loupe { display: none !important; }
 		.app { display: block; min-height: 0; }
 		.preview { padding: 0; }
 		.page {
@@ -189,11 +209,26 @@ document.addEventListener('DOMContentLoaded', function () {
 
 	// 자르는 선 직접 옮기기
 	const MIN_PAGE_RATIO  = 0.05; // 한 장의 최소 높이 (page_h × 이 비율)
-	const KEY_STEP_MM     = 1;    // 방향키 한 번 (인쇄 기준 mm)
-	const KEY_BIG_STEP_MM = 10;   // Shift+방향키, PageUp/PageDown
+	const KEY_STEP_MM     = 1;    // Shift+방향키 (인쇄 기준 mm). 방향키만 누르면 원본 1px
+	const KEY_BIG_STEP_MM = 10;   // PageUp/PageDown
 	const BTN_STEP_MM     = 5;    // ▲▼ 버튼 한 번
+	const NUDGE_COMMIT_MS = 800;  // 키보드·버튼 입력이 멈춘 뒤 확정까지. 그동안 돋보기로 위치를 볼 수 있다
 	const EDGE_SCROLL_PX  = 48;   // 끄는 동안 창 위아래 끝 이 안쪽이면 자동 스크롤
 	const EDGE_SCROLL_MAX = 20;   // 자동 스크롤 최대 속도 (프레임당 px)
+	const DRAG_START_PX   = 3;    // 이만큼 움직여야 끄는 것으로 친다 (클릭할 때의 손떨림 무시)
+	const FINE_DRAG_RATIO = 0.2;  // Shift를 누르고 끌 때의 속도
+
+	// 자석: 색 경계 판정 (실제 캡처로 맞춘 값)
+	const SNAP_RADIUS_PX  = 8;    // 화면에서 이 거리 안의 경계에 붙는다
+	const EDGE_SAMPLE_W   = 512;  // 판정에 쓰는 표본 폭. 가로로 평균되어 잡음에 강해진다
+	const EDGE_DELTA      = 6;    // 윗줄과 채널 차이가 이보다 크면 바뀐 칸
+	const EDGE_MIN_RATIO  = 0.3;  // 바뀐 칸이 폭의 이 비율 이상이면 색 경계 (가운데 놓인 카드도 잡히는 값)
+	const EDGE_MAX_RUN    = 4;    // 이보다 길게 이어지면 사진·무늬로 보고 제외
+
+	// 돋보기
+	const LOUPE_ZOOM      = 5;    // 미리보기 대비 배율
+	const LOUPE_MAX_SCALE = 4;    // 원본 1px의 최대 표시 크기 (작은 이미지 과확대 방지)
+	const LOUPE_GAP_PX    = 28;   // 선과 돋보기 사이 간격
 
 	const fileInput = document.getElementById('file');
 	const keepBox   = document.getElementById('keep');
@@ -208,6 +243,9 @@ document.addEventListener('DOMContentLoaded', function () {
 	const errorEl   = document.getElementById('error');
 	const pagesEl   = document.getElementById('pages');
 	const resetCutsBtn = document.getElementById('resetCuts');
+	const loupeEl     = document.getElementById('loupe');
+	const loupeCanvas = loupeEl.querySelector('canvas');
+	const loupeLabel  = loupeEl.querySelector('span');
 
 	let img = null;          // 로드된 원본 이미지
 	let fileName = '';
@@ -371,8 +409,65 @@ document.addEventListener('DOMContentLoaded', function () {
 		return out;
 	}
 
-	// 분할 위치 결정 → [{y0, y1, smart, manual, blank}]
-	// smart: 자동으로 빈 줄에서 잘랐는지, manual: 직접 옮긴 선인지, blank: (manual일 때) 그 줄이 빈 줄인지
+	// 원본의 [y0, y1) 구간에서 색 경계인 줄을 Uint8Array(1=경계)로 돌려줌. 경계 = 폭의 상당 부분이 윗줄과 색이 다른 줄.
+	// 정확한 줄을 찾아야 하므로 세로는 1:1로 두고 가로만 줄여 읽는다.
+	function edgeRows(y0, y1) {
+		const out = new Uint8Array(y1 - y0);
+		const from = Math.max(0, y0 - 1); // 첫 줄도 윗줄과 비교하도록 한 줄 위부터 읽는다
+		const h = y1 - from, w = Math.min(img.naturalWidth, EDGE_SAMPLE_W);
+		const c = document.createElement('canvas');
+		c.width = w; c.height = h;
+		const ctx = c.getContext('2d', { willReadFrequently: true });
+		ctx.imageSmoothingQuality = 'high';
+		ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h);
+		ctx.drawImage(img, 0, from, img.naturalWidth, h, 0, 0, w, h);
+		let d;
+		try {
+			d = ctx.getImageData(0, 0, w, h).data;
+		} catch (e) {
+			pixelReadFailed = true;
+			return out;
+		}
+		const need = Math.ceil(w * EDGE_MIN_RATIO);
+		for (let row = 1; row < h; row++) {
+			let changed = 0;
+			for (let i = row * w * 4, end = i + w * 4; i < end; i += 4) {
+				const j = i - w * 4;
+				if (Math.abs(d[i] - d[j]) > EDGE_DELTA || Math.abs(d[i + 1] - d[j + 1]) > EDGE_DELTA || Math.abs(d[i + 2] - d[j + 2]) > EDGE_DELTA) changed++;
+			}
+			if (changed >= need) out[row + from - y0] = 1;
+		}
+		// 짧게 끝나는 변화만 경계로 남기고 그 첫 줄을 쓴다. 길게 이어지면 사진·무늬다.
+		for (let i = 0; i < out.length;) {
+			if (!out[i]) { i++; continue; }
+			let j = i + 1;
+			while (j < out.length && out[j]) out[j++] = 0;
+			if (j - i > EDGE_MAX_RUN) out[i] = 0;
+			i = j;
+		}
+		return out;
+	}
+
+	// 직접 옮긴 선의 위치 y가 어떤 자리인지: 'edge' 색 경계, 'blank' 위아래 줄 중 하나가 빈 줄, null 내용을 가로지름
+	function boundaryAt(y) {
+		const from = Math.max(0, y - EDGE_MAX_RUN - 1);
+		const edge = edgeRows(from, Math.min(img.naturalHeight, y + EDGE_MAX_RUN + 2));
+		if (edge[y - from]) return 'edge';
+		return blankRows(y - 1, y + 1).some(v => v) ? 'blank' : null;
+	}
+
+	// 선이 붙을 지점(원본 y) 오름차순: 색 경계, 그리고 빈 줄과 내용이 바뀌는 줄. blank·edge는 y0부터의 줄 배열
+	function snapTargets(y0, blank, edge, min, max) {
+		const out = [];
+		for (let i = 1; i < blank.length; i++) {
+			const y = y0 + i;
+			if (y >= min && y <= max && (edge[i] || blank[i] !== blank[i - 1])) out.push(y);
+		}
+		return out;
+	}
+
+	// 분할 위치 결정 → [{y0, y1, smart, manual, boundary}]
+	// smart: 자동으로 빈 줄에서 잘랐는지, manual: 직접 옮긴 선인지, boundary: (manual일 때) boundaryAt() 결과
 	// 직접 옮긴 선은 강제 페이지 나눔으로 다루고, 그 사이만 자동으로 나눈다.
 	function segments(naturalH, pageH, smart) {
 		const manual = [...manualCuts].sort((a, b) => a - b);
@@ -382,7 +477,7 @@ document.addEventListener('DOMContentLoaded', function () {
 			while (next < manual.length && manual[next] <= y0) next++;
 			if (next < manual.length && manual[next] - y0 <= pageH) {
 				const y1 = manual[next];
-				segs.push({ y0, y1, smart: false, manual: true, blank: blankRows(y1, y1 + 1)[0] === 1 });
+				segs.push({ y0, y1, smart: false, manual: true, boundary: boundaryAt(y1) });
 				y0 = y1;
 				continue;
 			}
@@ -438,7 +533,7 @@ document.addEventListener('DOMContentLoaded', function () {
 	function cutKind(seg) {
 		if (!seg.manual) return seg.smart ? '빈 줄에서 자름' : '등분';
 		if (pixelReadFailed) return '직접 지정';
-		return seg.blank ? '직접 지정 · 빈 줄' : '직접 지정 · 내용을 자름';
+		return `직접 지정 · ${{ edge: '색 경계', blank: '빈 줄' }[seg.boundary] || '내용을 자름'}`;
 	}
 
 	// 선의 글자와 접근성 값을 갱신
@@ -457,7 +552,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		cut.dataset.index = idx;
 		cut.style.top = '100%'; // 인쇄 영역(.content) 바닥 = 조각 끝
 		cut.innerHTML = `
-			<div class="cut-handle" role="slider" tabindex="0" aria-orientation="vertical" title="끌어서 자를 위치 변경"
+			<div class="cut-handle" role="slider" tabindex="0" aria-orientation="vertical" title="끌어서 자를 위치 변경 (Shift: 자석 없이 천천히)"
 				aria-label="${n}페이지를 자를 위치" aria-valuemin="${min}" aria-valuemax="${max}"><span class="grip"></span></div>
 			<div class="cut-tools">
 				<span class="cut-label"></span>
@@ -540,6 +635,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		clearTimeout(editTimer);
 		if (edit && edit.drag) cancelAnimationFrame(edit.drag.raf);
 		edit = null;
+		loupeEl.hidden = true;
 	}
 
 	function beginEdit(index) {
@@ -558,10 +654,14 @@ document.addEventListener('DOMContentLoaded', function () {
 		veil.className = 'veil';
 		veil.innerHTML = '<span>다음 장으로 넘어갑니다</span>';
 		cut.before(veil);
+		const range = cutRange(seg);
+		const scanEnd = Math.min(end + 1, img.naturalHeight);
+		const blank = blankRows(seg.y0, scanEnd), edge = edgeRows(seg.y0, scanEnd);
 		edit = {
-			index, seg, end, canvas, veil, cut, ...cutRange(seg), y: seg.y1, drag: null,
-			blank: blankRows(seg.y0, Math.min(end + 1, img.naturalHeight)),
+			index, seg, end, canvas, veil, cut, ...range, y: seg.y1, drag: null,
+			blank, edge, targets: snapTargets(seg.y0, blank, edge, range.min, range.max),
 		};
+		showLoupe();
 		placeEdit(seg.y1);
 		return edit;
 	}
@@ -570,8 +670,64 @@ document.addEventListener('DOMContentLoaded', function () {
 		const e = edit;
 		e.y = Math.round(Math.min(e.max, Math.max(e.min, y)));
 		e.cut.style.top = e.veil.style.top = `${(e.y - e.seg.y0) / (e.end - e.seg.y0) * 100}%`;
-		const shown = e.y === e.seg.y1 ? e.seg : { manual: true, blank: e.blank[e.y - e.seg.y0] === 1 };
-		showCut(e.cut, cutKind(shown), e.y);
+		e.cut.classList.toggle('snapped', e.targets.includes(e.y));
+		const i = e.y - e.seg.y0;
+		const boundary = e.edge[i] ? 'edge' : (e.blank[i] || e.blank[i - 1]) ? 'blank' : null;
+		showCut(e.cut, cutKind(e.y === e.seg.y1 ? e.seg : { manual: true, boundary }), e.y);
+		updateLoupe();
+	}
+
+	function showLoupe() {
+		loupeEl.hidden = false;
+		const dpr = window.devicePixelRatio || 1;
+		loupeCanvas.width  = Math.round(loupeEl.clientWidth * dpr);
+		loupeCanvas.height = Math.round(loupeEl.clientHeight * dpr);
+	}
+
+	// 선 주변을 확대해 그리고 창 위치를 맞춘다. 배경색 처리까지 보이도록 펼쳐 둔 미리보기 캔버스에서 옮겨 그린다.
+	function updateLoupe() {
+		const e = edit, r = e.canvas.getBoundingClientRect();
+		const natW = img.naturalWidth, boxW = loupeEl.clientWidth, boxH = loupeEl.clientHeight;
+		const pointerX = e.drag ? e.drag.clientX : r.left + r.width / 2;
+
+		// 원본에서 보여 줄 영역. 가운데 줄이 선이고, 가로는 포인터를 따라간다
+		const zoom = Math.min(LOUPE_MAX_SCALE, r.width / natW * LOUPE_ZOOM);
+		const viewW = boxW / zoom, viewH = boxH / zoom;
+		const centerX = viewW >= natW ? natW / 2 : Math.min(natW - viewW / 2, Math.max(viewW / 2, (pointerX - r.left) / r.width * natW));
+		const sx = centerX - viewW / 2, sy = e.y - viewH / 2;
+
+		const ctx = loupeCanvas.getContext('2d');
+		const cw = loupeCanvas.width, ch = loupeCanvas.height, dpr = cw / boxW, mid = Math.round(ch / 2);
+		const toCanvas = e.canvas.width / natW;
+		const cssVar = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+		ctx.imageSmoothingEnabled = false; // 줄 하나하나가 또렷하게 보이도록
+		ctx.fillStyle = cssVar('--bg');
+		ctx.fillRect(0, 0, cw, ch);
+		ctx.drawImage(e.canvas, sx * toCanvas, (sy - e.seg.y0) * toCanvas, viewW * toCanvas, viewH * toCanvas, 0, 0, cw, ch);
+		ctx.fillStyle = 'rgba(255,255,255,.45)'; // 선 아래는 다음 장으로 넘어가는 부분
+		ctx.fillRect(0, mid, cw, ch - mid);
+
+		// 자석 지점은 양쪽 끝의 눈금으로
+		ctx.fillStyle = cssVar('--snap');
+		for (const y of e.targets) {
+			const dy = Math.round((y - sy) * zoom * dpr);
+			if (dy < 0 || dy > ch) continue;
+			ctx.fillRect(0, dy, 12 * dpr, 2 * dpr);
+			ctx.fillRect(cw - 12 * dpr, dy, 12 * dpr, 2 * dpr);
+		}
+		if (!e.targets.includes(e.y)) ctx.fillStyle = cssVar('--danger');
+		ctx.fillRect(0, mid, cw, Math.max(1, Math.round(dpr)));
+
+		loupeLabel.textContent = (e.drag?.fine ? '정밀 이동 · ' : '') + e.cut.querySelector('.cut-label').textContent;
+
+		// 창 위치: 선 위쪽, 공간이 없으면 아래쪽
+		const vw = document.documentElement.clientWidth, vh = document.documentElement.clientHeight;
+		const w = loupeEl.offsetWidth, h = loupeEl.offsetHeight;
+		const lineY = r.top + (e.y - e.seg.y0) / (e.end - e.seg.y0) * r.height;
+		const above = lineY - h - LOUPE_GAP_PX;
+		const top = above >= 8 ? above : lineY + LOUPE_GAP_PX;
+		loupeEl.style.left = `${Math.min(vw - w - 8, Math.max(8, pointerX - w / 2))}px`;
+		loupeEl.style.top = `${Math.min(vh - h - 8, Math.max(8, top))}px`;
 	}
 
 	function finishEdit(commit) {
@@ -607,7 +763,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (!e) return;
 		placeEdit(target(e));
 		clearTimeout(editTimer);
-		editTimer = setTimeout(() => finishEdit(true), RENDER_DELAY_MS);
+		editTimer = setTimeout(() => finishEdit(true), NUDGE_COMMIT_MS);
 	}
 
 	function clearManualCut(index) {
@@ -617,10 +773,42 @@ document.addEventListener('DOMContentLoaded', function () {
 		renderKeepFocus();
 	}
 
+	// y에서 radius 안의 가장 가까운 자석 지점. 없으면 null
+	function nearestSnap(targets, y, radius) {
+		let best = null, bestDist = radius;
+		for (const t of targets) {
+			const dist = Math.abs(t - y);
+			if (dist <= bestDist) { best = t; bestDist = dist; }
+		}
+		return best;
+	}
+
+	// 지금 위치에서 위(-1)·아래(1)로 다음 자석 지점. 없으면 제자리
+	function snapFrom(e, dir) {
+		const list = dir < 0 ? [...e.targets].reverse() : e.targets;
+		return list.find(y => (y - e.y) * dir > 0) ?? e.y;
+	}
+
 	// 포인터 위치 → 선 위치. 스크롤이 움직여도 맞도록 매번 캔버스 위치를 다시 잰다
 	function followPointer() {
-		const r = edit.canvas.getBoundingClientRect();
-		placeEdit(edit.seg.y0 + (edit.drag.clientY - edit.drag.grab - r.top) / r.height * (edit.end - edit.seg.y0));
+		const e = edit, d = e.drag, r = e.canvas.getBoundingClientRect();
+		let y = e.seg.y1;
+		if (d.moved) {
+			const srcPerPx = (e.end - e.seg.y0) / r.height;
+			const raw = d.base + (d.clientY - r.top - d.baseP) * srcPerPx * (d.fine ? FINE_DRAG_RATIO : 1);
+			y = (d.fine ? null : nearestSnap(e.targets, raw, SNAP_RADIUS_PX * srcPerPx)) ?? raw;
+		}
+		placeEdit(y);
+	}
+
+	// Shift를 누르거나 뗄 때: 지금 자리에서 이어지도록 기준점을 옮긴다
+	function setFine(on) {
+		const d = edit?.drag;
+		if (!d || d.fine === on) return;
+		d.fine = on;
+		d.base = edit.y;
+		d.baseP = d.clientY - edit.canvas.getBoundingClientRect().top;
+		followPointer();
 	}
 
 	// A4 한 장이 창보다 길 수 있어서, 창 끝으로 끌면 스크롤한다. 휠로 스크롤해도 선이 포인터를 따라온다.
@@ -635,7 +823,11 @@ document.addEventListener('DOMContentLoaded', function () {
 	}
 
 	// 선 요소는 render()로 계속 바뀌므로 #pages에 위임한다
-	document.addEventListener('keydown', () => pagesEl.classList.remove('by-pointer'));
+	document.addEventListener('keydown', e => {
+		if (e.key === 'Shift') setFine(true);
+		if (!['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) pagesEl.classList.remove('by-pointer');
+	});
+	document.addEventListener('keyup', e => { if (e.key === 'Shift') setFine(false); });
 	pagesEl.addEventListener('pointerdown', e => {
 		if (e.target.closest('.cut')) pagesEl.classList.add('by-pointer');
 		if (e.button !== 0 || !e.target.closest('.cut-handle')) return;
@@ -647,15 +839,21 @@ document.addEventListener('DOMContentLoaded', function () {
 		handle.focus({ preventScroll: true });
 		handle.setPointerCapture(e.pointerId);
 		const ed = beginEdit(index);
-		const r = ed.canvas.getBoundingClientRect();
-		const lineY = r.top + (ed.y - ed.seg.y0) / (ed.end - ed.seg.y0) * r.height;
-		ed.drag = { id: e.pointerId, clientY: e.clientY, grab: e.clientY - lineY, moved: false, raf: requestAnimationFrame(dragFrame) };
+		ed.drag = {
+			id: e.pointerId, clientX: e.clientX, clientY: e.clientY, startY: e.clientY, moved: false, fine: e.shiftKey,
+			base: ed.y, baseP: e.clientY - ed.canvas.getBoundingClientRect().top,
+			raf: requestAnimationFrame(dragFrame),
+		};
 		ed.cut.classList.add('dragging');
+		followPointer();
 	});
 	pagesEl.addEventListener('pointermove', e => {
-		if (!edit?.drag || e.pointerId !== edit.drag.id) return;
-		edit.drag.clientY = e.clientY;
-		edit.drag.moved = true;
+		const d = edit?.drag;
+		if (!d || e.pointerId !== d.id) return;
+		d.clientX = e.clientX;
+		d.clientY = e.clientY;
+		if (Math.abs(e.clientY - d.startY) >= DRAG_START_PX) d.moved = true;
+		setFine(e.shiftKey);
 		followPointer();
 	});
 	pagesEl.addEventListener('pointerup', e => { if (edit?.drag && e.pointerId === edit.drag.id) finishEdit(true); });
@@ -667,10 +865,12 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (e.key === 'Escape') { finishEdit(false); return; }
 		if (edit?.drag) return;
 		if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); stopEdit(); clearManualCut(index); return; }
-		const small = mmToSrc(KEY_STEP_MM), big = mmToSrc(KEY_BIG_STEP_MM);
-		const step = e.shiftKey ? big : small;
+		const big = mmToSrc(KEY_BIG_STEP_MM);
+		const step = e.shiftKey ? mmToSrc(KEY_STEP_MM) : 1;
+		const jump = e.ctrlKey || e.metaKey; // Ctrl(맥은 ⌘)+방향키: 다음 자석 지점으로
 		const moves = {
-			ArrowUp: ed => ed.y - step, ArrowDown: ed => ed.y + step,
+			ArrowUp: ed => jump ? snapFrom(ed, -1) : ed.y - step,
+			ArrowDown: ed => jump ? snapFrom(ed, 1) : ed.y + step,
 			PageUp: ed => ed.y - big, PageDown: ed => ed.y + big,
 			Home: ed => ed.min, End: ed => ed.max,
 		};
@@ -802,7 +1002,8 @@ document.addEventListener('DOMContentLoaded', function () {
 				<input type="checkbox" id="smart" checked>
 				<label for="smart">빈 줄에 맞춰 자르기</label>
 			</div>
-			<p class="hint">미리보기의 빨간 선을 위아래로 끌면 페이지마다 자를 위치를 바꿀 수 있습니다. 선을 선택한 뒤 <kbd>↑</kbd> <kbd>↓</kbd>로도 옮길 수 있습니다.</p>
+			<p class="hint">미리보기의 빨간 선을 위아래로 끌면 페이지마다 자를 위치를 바꿀 수 있습니다. 색이 바뀌는 곳이나 내용의 위아래 끝에 선이 자석처럼 붙고, <kbd>Shift</kbd>를 누른 채 끌면 자석 없이 천천히 움직입니다.</p>
+			<p class="hint">선을 선택한 뒤 <kbd>↑</kbd> <kbd>↓</kbd>로 1픽셀씩, <kbd>Ctrl</kbd>(맥은 <kbd>⌘</kbd>)+<kbd>↑</kbd> <kbd>↓</kbd>로 다음 경계까지 옮길 수 있습니다.</p>
 			<button type="button" id="resetCuts" class="secondary" hidden>직접 옮긴 선 모두 되돌리기</button>
 			<div class="field">
 				<input type="checkbox" id="bgOn">
@@ -835,6 +1036,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 	<main class="preview" aria-label="미리보기">
 		<div id="pages"></div>
+		<div id="loupe" aria-hidden="true" hidden><canvas></canvas><span></span></div>
 	</main>
 </div>
 
