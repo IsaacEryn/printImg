@@ -1974,7 +1974,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 		docListEl.addEventListener('click', e => {
 			const btn = e.target.closest('button');
-			if (!btn) return;
+			if (!btn || e.detail > 1) return; // 빠르게 두 번 누르면 올라온 다음 줄까지 빠지고, 옮긴 순서가 도로 돌아간다
 			const { act } = btn.dataset, id = Number(btn.closest('li').dataset.id); // 확정하면 목록이 다시 만들어지므로 먼저 읽어 둔다
 			settleEdit();
 			const d = docs.find(x => x.id === id);
@@ -2009,7 +2009,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
 		// 화면에 한 번도 그려지지 않은 캔버스는 Chrome이 그리기 명령째로 PDF에 넣는다. 그러면 가린 자리 밑에 원본 픽셀이 남고 크기도 조금 줄어든다.
 		// 전체를 다시 써서 픽셀로 굳힌다 (한 칸만 읽거나 willReadFrequently를 켜는 것으로는 막지 못했다). 인쇄 직전에 다시 그린 #pages도 마찬가지다.
+		const baked = new WeakSet(); // 페이지 캔버스는 만든 뒤 고치지 않으므로, 같은 장을 거듭 인쇄할 때 다시 읽을 필요가 없다
 		function bakePixels(canvas) {
+			if (baked.has(canvas)) return;
+			baked.add(canvas);
 			const ctx = canvas.getContext('2d');
 			try {
 				ctx.putImageData(ctx.getImageData(0, 0, canvas.width, canvas.height), 0, 0);
