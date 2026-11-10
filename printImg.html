@@ -1242,6 +1242,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (e.button !== 0 || !e.target.closest('.cut-handle')) return;
 		e.preventDefault(); // 끄는 동안 글자·이미지가 선택되지 않게
 		const index = Number(e.target.closest('.cut').dataset.index);
+		if (document.activeElement === marginIn) marginIn.blur(); // 입력 직후에 눌렀으면 여백을 먼저 반영한다. 아래 focus() 도중에 다시 그리면 잡은 선이 사라진다
 		if (edit) finishEdit(true); // 키보드로 옮기던 게 남았으면 먼저 확정 (이때 선 요소가 새로 만들어진다)
 		const handle = pagesEl.querySelector(`.cut[data-index="${index}"] .cut-handle`);
 		if (!handle) return;
@@ -1425,7 +1426,12 @@ document.addEventListener('DOMContentLoaded', function () {
 	});
 	bgMode.addEventListener('change', render);
 	marginIn.addEventListener('input', renderSoon);
-	marginIn.addEventListener('change', () => { clearTimeout(renderTimer); marginIn.value = marginMm(); render(); });
+	marginIn.addEventListener('change', () => {
+		clearTimeout(renderTimer);
+		marginIn.value = marginMm();
+		// 입력 중에 이미 그린 값이면 다시 그리지 않는다. 칸을 벗어나며 누른 단추나 선이 새로 만들어지면 그 클릭이 사라진다
+		if (document.documentElement.style.getPropertyValue('--margin') !== `${marginMm()}mm`) render();
+	});
 	printBtn.addEventListener('click', () => window.print());
 
 	// ---------- 되돌리기 ----------
