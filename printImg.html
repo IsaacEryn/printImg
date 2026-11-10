@@ -214,6 +214,26 @@
 	/* ---------- 구간 빼기·가리기 끝 ---------- */
 
 	/* ---------- 쪽 번호 ---------- */
+	/* 화면에는 보이지 않고, 옵션을 켰을 때 종이에만 나온다 */
+	.pnum { display: none; }
+	@media print {
+		/* 흐름에서 빼고 용지 위쪽부터 재므로 장의 높이와 상관없이 같은 자리에 오고 쪽 나눔도 바뀌지 않는다.
+		   여백이 넓으면 아래 여백 띠의 가운데로 올라온다 */
+		html.pnum-on .pnum {
+			display: block;
+			position: absolute; left: 0; right: 0;
+			top: calc(297mm - max(9mm, calc(var(--margin) / 2 + 2.5mm)));
+			text-align: center;
+			font-size: 10pt; color: #000;
+		}
+		/* 여백이 좁으면 이미지와 겹치므로 흰 바탕을 깐다. 배경을 빼고 인쇄하는 브라우저에서도 남도록 exact */
+		.pnum span {
+			padding: 0 2mm;
+			background: #fff;
+			-webkit-print-color-adjust: exact;
+			print-color-adjust: exact;
+		}
+	}
 	/* ---------- 쪽 번호 끝 ---------- */
 
 	/* ---------- 여러 이미지 ---------- */
@@ -1292,6 +1312,26 @@ document.addEventListener('DOMContentLoaded', function () {
 	// ---------- 구간 빼기·가리기 끝 ----------
 
 	// ---------- 쪽 번호 ----------
+	{
+		const pageNumbersBox = document.getElementById('pageNumbers');
+
+		// 켜고 끄는 것은 <html>의 클래스 하나뿐이라 다시 나누거나 그리지 않는다
+		const syncPageNumbers = () => document.documentElement.classList.toggle('pnum-on', pageNumbersBox.checked);
+		pageNumbersBox.addEventListener('change', syncPageNumbers);
+		hooks.afterRender.push(syncPageNumbers); // change 없이 되살린 값도 여기서 맞춘다
+
+		// 번호는 옵션과 상관없이 넣어 두고, 보일지는 CSS가 정한다. 인쇄 전용 장에도 불리므로 page만 건드린다
+		hooks.pageBuilt.push((page, seg, idx, total) => {
+			const numbering = pageNumberOf(idx, total);
+			const label = document.createElement('span');
+			label.textContent = `${numbering.n} / ${numbering.total}`;
+			const pnum = document.createElement('div');
+			pnum.className = 'pnum';
+			pnum.setAttribute('aria-hidden', 'true');
+			pnum.appendChild(label);
+			page.appendChild(pnum);
+		});
+	}
 	// ---------- 쪽 번호 끝 ----------
 
 	// ---------- 여러 이미지 ----------
@@ -1349,6 +1389,10 @@ document.addEventListener('DOMContentLoaded', function () {
 				<span id="margin-hint" class="hint">0~30 사이. 네 변 동일.</span>
 			</div>
 			<!-- 쪽 번호: 옵션 -->
+			<div class="field">
+				<input type="checkbox" id="pageNumbers">
+				<label for="pageNumbers">쪽 번호 인쇄 (n / 전체)</label>
+			</div>
 		</fieldset>
 
 		<!-- 구간 빼기·가리기: 목록 -->
