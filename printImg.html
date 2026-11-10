@@ -1025,6 +1025,12 @@ document.addEventListener('DOMContentLoaded', function () {
 	// render()는 페이지를 통째로 새로 만드므로, 선의 컨트롤에 있던 포커스를 같은 자리로 돌려놓는다
 	function renderKeepFocus() {
 		const active = document.activeElement;
+		const addBreakPage = active?.closest('.add-break')?.closest('.page').dataset.index;
+		if (addBreakPage !== undefined) {
+			render();
+			(pagesEl.querySelector(`.page[data-index="${addBreakPage}"] .add-break`) || printBtn).focus({ preventScroll: true });
+			return;
+		}
 		const cut = active?.closest('.cut');
 		if (!cut) return render();
 		const sel = `.cut[data-index="${cut.dataset.index}"]`;
@@ -1168,10 +1174,10 @@ document.addEventListener('DOMContentLoaded', function () {
 		if (e.key === 'Delete' || e.key === 'Backspace') {
 			e.preventDefault();
 			if (view.segs[index].manual) {
-				stopEdit();
+				if (edit?.index === index) stopEdit(); // 이 선을 옮기던 것만 버린다. 다른 선은 mutateDoc이 먼저 확정한다
 				clearManualCut(index);
 			} else {
-				finishEdit(false); // 옮기던 중이면 펼친 캔버스까지 되돌린다. 그 뒤에 알려야 render에 지워지지 않는다
+				if (edit?.index === index) finishEdit(false); // 옮기던 중이면 펼친 캔버스까지 되돌린다. 그 뒤에 알려야 render에 지워지지 않는다
 				status.textContent = '자동으로 나뉜 선은 뺄 수 없습니다.';
 			}
 			return;
@@ -1197,7 +1203,7 @@ document.addEventListener('DOMContentLoaded', function () {
 		const step = mmToSrc(BTN_STEP_MM);
 		if (btn.dataset.action === 'up') nudge(index, ed => ed.y - step);
 		else if (btn.dataset.action === 'down') nudge(index, ed => ed.y + step);
-		else { stopEdit(); clearManualCut(index); }
+		else { if (edit?.index === index) stopEdit(); clearManualCut(index); }
 	});
 
 	resetCutsBtn.addEventListener('click', () => {
@@ -1349,8 +1355,19 @@ document.addEventListener('DOMContentLoaded', function () {
 			page.appendChild(btn);
 		});
 
+		// 두 번째 클릭은 첫 클릭과 같은 버튼일 때만 듣는다. 자동·빼기를 두 번 누르면 그 자리로 밀려온 ▲▼까지 눌려 선이 또 움직인다
+		let firstTool = null;
+		pagesEl.addEventListener('click', e => {
+			const tool = e.target.closest('.cut-tools button')?.dataset.action ?? null;
+			if (e.detail <= 1) firstTool = tool;
+			else if (tool && tool !== firstTool) e.stopPropagation();
+		}, true);
+
+		let presses = [false, false]; // 최근 두 번 누른 곳이 선이나 버튼이었는지
+		pagesEl.addEventListener('pointerdown', e => { presses = [presses[1], Boolean(e.target.closest('.cut, button'))]; }, true);
+
 		pagesEl.addEventListener('dblclick', e => {
-			if (previewTool || e.target.closest('.cut, button')) return;
+			if (previewTool || presses.some(Boolean) || e.target.closest('.cut, button')) return;
 			settleEdit();
 			const p = pointAt(e.clientX, e.clientY);
 			if (!p || e.clientY < p.rect.top || e.clientY > p.rect.bottom) return; // 이미지 바깥(종이 여백·장 사이)에는 나눌 줄이 없다
