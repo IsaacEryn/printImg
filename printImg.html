@@ -205,6 +205,15 @@
 	}
 
 	/* ---------- 되돌리기 ---------- */
+	#undoTools button {
+		width: auto; min-width: 24px; min-height: 24px; padding: 3px 10px;
+		font-size: 13px; line-height: 1.4;
+		color: var(--accent); background: var(--panel); border: 1px solid var(--accent); border-radius: 6px;
+	}
+	#undoTools button:disabled { color: var(--muted); background: var(--bg); border-color: var(--line); }
+	@media print {
+		#undoTools { display: none !important; }
+	}
 	/* ---------- 되돌리기 끝 ---------- */
 
 	/* ---------- 페이지 나누기 ---------- */
@@ -1283,6 +1292,74 @@ document.addEventListener('DOMContentLoaded', function () {
 	printBtn.addEventListener('click', () => window.print());
 
 	// ---------- 되돌리기 ----------
+	{
+		const MAX_HISTORY = 100; // 문서마다 남기는 단계 수. 넘으면 가장 오래된 단계부터 버린다
+		const NON_TEXT_INPUTS = ['checkbox', 'radio', 'file', 'color', 'button'];
+		const undoBtn = document.getElementById('undoBtn');
+		const redoBtn = document.getElementById('redoBtn');
+
+		// 고치기 직전 상태를 쌓는다. 새로 고치면 다시 하기 목록은 뜻이 없어진다
+		hooks.beforeMutate.push((d, before, label) => {
+			d.undo.push({ label, before });
+			if (d.undo.length > MAX_HISTORY) d.undo.shift();
+			d.redo.length = 0;
+		});
+
+		// from 목록의 마지막 단계로 되돌아가고, 지금 상태는 to 목록에 쌓아 반대로 돌아올 수 있게 한다
+		function stepHistory(from, to, word) {
+			if (!doc) return;
+			settleEdit(); // 옮기던 선을 먼저 확정한다. 그 확정이 곧 되돌릴 단계다
+			const step = doc[from].pop();
+			if (!step) return;
+			doc[to].push({ label: step.label, before: snapshotDoc(doc) });
+			restoreDoc(doc, step.before);
+			renderKeepFocus();
+			status.textContent += ` · ${word}: ${step.label}`;
+			const active = document.activeElement;
+			if (!active || active === document.body) printBtn.focus({ preventScroll: true }); // renderKeepFocus가 선을 못 찾을 때 가는 자리
+		}
+		const undo = () => stepHistory('undo', 'redo', '되돌림');
+		const redo = () => stepHistory('redo', 'undo', '다시 함');
+
+		// 버튼은 다음 단계의 이름을 알려 준다. 문서가 바뀌어도 다시 맞도록 렌더 끝마다 부른다
+		function syncButtons() {
+			const nextUndo = doc?.undo.at(-1), nextRedo = doc?.redo.at(-1);
+			const active = document.activeElement;
+			undoBtn.disabled = !nextUndo;
+			redoBtn.disabled = !nextRedo;
+			undoBtn.title = nextUndo ? `되돌리기: ${nextUndo.label} (Ctrl+Z, 맥은 ⌘+Z)` : '되돌릴 편집이 없습니다';
+			redoBtn.title = nextRedo ? `다시 하기: ${nextRedo.label} (Ctrl+Shift+Z 또는 Ctrl+Y, 맥은 ⌘+Shift+Z)` : '다시 할 편집이 없습니다';
+			// 포커스가 있던 버튼이 막히면 키보드 사용자가 자리를 잃으므로 쓸 수 있는 곳으로 옮긴다
+			if ((active === undoBtn || active === redoBtn) && active.disabled) {
+				[undoBtn, redoBtn, printBtn, fileInput].find(el => !el.disabled).focus({ preventScroll: true });
+			}
+		}
+		hooks.afterRender.push(syncButtons);
+		syncButtons();
+		undoBtn.addEventListener('click', undo);
+		redoBtn.addEventListener('click', redo);
+		document.getElementById('previewTools').hidden = false;
+
+		// 글자를 넣는 칸에서는 브라우저의 되돌리기를 그대로 둔다
+		function isTextEntry(el) {
+			if (!el || !el.tagName) return false;
+			if (el.isContentEditable || el.tagName === 'TEXTAREA') return true;
+			return el.tagName === 'INPUT' && !NON_TEXT_INPUTS.includes(el.type);
+		}
+
+		// 눌린 글자. 한글 입력 상태에서는 e.key가 자모로 오므로 그때는 키 자리(e.code)로 판단한다
+		const pressedLetter = e => /^[\x00-\x7f]$/.test(e.key) ? e.key.toLowerCase() : { KeyZ: 'z', KeyY: 'y' }[e.code];
+
+		document.addEventListener('keydown', e => {
+			if (e.altKey || !(e.ctrlKey || e.metaKey)) return;
+			const letter = pressedLetter(e);
+			const action = letter === 'z' ? (e.shiftKey ? redo : undo)
+				: letter === 'y' && e.ctrlKey && !e.metaKey && !e.shiftKey ? redo : null;
+			if (!action || !doc || e.isComposing || isTextEntry(e.target)) return;
+			e.preventDefault();
+			action();
+		});
+	}
 	// ---------- 되돌리기 끝 ----------
 
 	// ---------- 페이지 나누기 ----------
@@ -1368,6 +1445,8 @@ document.addEventListener('DOMContentLoaded', function () {
 	<main class="preview" aria-label="미리보기">
 		<div id="previewTools" class="preview-tools" role="toolbar" aria-label="편집 도구" hidden>
 			<div id="undoTools">
+				<button type="button" id="undoBtn" aria-keyshortcuts="Control+Z Meta+Z" disabled>되돌리기</button>
+				<button type="button" id="redoBtn" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y" disabled>다시 하기</button>
 			</div>
 			<div id="markTools">
 			</div>
