@@ -68,6 +68,8 @@
 	.field input[type=checkbox] { width: 18px; height: 18px; margin: 0; }
 	.field input[type=number], .field select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 	.field input[type=number] { width: 6em; }
+	.field input[type=text] { min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+	#pdfStatus:empty { display: none; }
 	.field select:disabled { color: var(--muted); background: #f4f4f6; }
 	.field input[type=color] { width: 36px; height: 32px; padding: 2px; border: 1px solid var(--line); border-radius: 6px; background: #fff; cursor: pointer; }
 	.field input[type=color]:disabled { cursor: not-allowed; opacity: .5; }
@@ -2120,6 +2122,179 @@ document.addEventListener('DOMContentLoaded', function () {
 	}
 	// ---------- 여러 이미지 끝 ----------
 
+	// ---------- PDF 저장 ----------
+	// 인쇄 창을 거치지 않고 PDF 파일을 직접 만든다. 인쇄와 같은 조각·배치를 쓰고, 그림은 캔버스 픽셀만 무손실로 담는다.
+	// 그래서 가린 곳의 원본은 파일 어디에도 들어가지 않고, 인쇄 창의 배율·여백 설정에도 흔들리지 않는다.
+	{
+		const savePdfBtn = document.getElementById('savePdf');
+		const pdfNameIn  = document.getElementById('pdfName');
+		const pdfStatus  = document.getElementById('pdfStatus');
+		const pageNumbersBox = document.getElementById('pageNumbers');
+		const PT_PER_MM = 72 / MM_PER_INCH, PT_PER_PX = 72 / CSS_DPI;
+		const PAGE_W = A4_W_MM * PT_PER_MM, PAGE_H = A4_H_MM * PT_PER_MM;
+		const STRIP_ROWS = 256;   // 픽셀을 이만큼씩 읽어 압축한다. 큰 장도 메모리를 한꺼번에 쓰지 않게
+		const PNUM_PT = 10;       // 쪽 번호 글자 크기. 인쇄 CSS(.pnum)와 같다
+		const PNUM_BASELINE = 11.7; // .pnum 상자 위에서 글자 기준선까지(pt). 줄 높이 1.5와 글꼴 높이로 정한 값
+		const PNUM_ASCENT = 10.9, PNUM_DESCENT = 2.4; // 흰 바탕을 깔 글자 높이(pt). 인쇄의 span 배경과 맞춘다
+		const enc = new TextEncoder();
+		const fixed = v => String(+v.toFixed(3));
+		let busy = false;
+
+		function defaultName() {
+			if (!docs.length) return 'PrintImg';
+			const first = docs[0].name.replace(/\.[^.]+$/, '');
+			return docs.length > 1 ? `${first} 외 ${docs.length - 1}개` : first;
+		}
+
+		// 파일 이름에 쓸 수 없는 글자를 바꾼다. 확장자 .pdf는 붙이지 않은 이름을 돌려준다
+		function baseName() {
+			const raw = pdfNameIn.value.trim() || defaultName();
+			return raw.replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 120).trim() || 'PrintImg';
+		}
+
+		// PDF 문자열(UTF-16BE 16진수). 한글 제목도 그대로 담긴다
+		const pdfText = s => '<FEFF' + Array.from({ length: s.length }, (_, i) => s.charCodeAt(i).toString(16).padStart(4, '0')).join('') + '>';
+
+		// Helvetica 글자 폭(1/1000em). 쪽 번호에는 숫자·공백·빗금만 쓴다
+		const textWidth = s => [...s].reduce((sum, ch) => sum + (ch === ' ' || ch === '/' ? 278 : 556), 0) / 1000 * PNUM_PT;
+
+		// 캔버스 픽셀을 PNG의 Up 예측(윗줄과의 차이)으로 바꿔 deflate한다. 화면 캡처는 위아래로 같은 색이 많아 잘 줄어든다.
+		// 줄마다 예측 방식을 고르는 방법도 재 봤지만 실제 캡처에서 크기는 그대로이고 시간만 두 배라 쓰지 않는다
+		async function encodePixels(canvas) {
+			const w = canvas.width, h = canvas.height, ctx = canvas.getContext('2d');
+			const cs = new CompressionStream('deflate');
+			const result = new Response(cs.readable).blob();
+			const writer = cs.writable.getWriter();
+			let prev = new Uint8Array(w * 3), cur = new Uint8Array(w * 3);
+			for (let top = 0; top < h; top += STRIP_ROWS) {
+				const rows = Math.min(STRIP_ROWS, h - top);
+				const rgba = ctx.getImageData(0, top, w, rows).data;
+				const out = new Uint8Array(rows * (1 + w * 3));
+				let o = 0;
+				for (let r = 0; r < rows; r++) {
+					for (let x = 0, i = r * w * 4, k = 0; x < w; x++, i += 4) {
+						cur[k++] = rgba[i]; cur[k++] = rgba[i + 1]; cur[k++] = rgba[i + 2];
+					}
+					out[o++] = 2; // 이 줄은 Up 예측
+					for (let k = 0; k < cur.length; k++) out[o++] = cur[k] - prev[k];
+					[prev, cur] = [cur, prev];
+				}
+				await writer.write(out);
+			}
+			await writer.close();
+			return result;
+		}
+
+		// 한 장의 그리기 명령. 배치는 인쇄 CSS와 같다: 위 여백에서 시작, 가로 가운데, 쪽 번호는 .pnum 자리
+		function pageContent(job, m) {
+			const margin = m * PT_PER_MM;
+			const w = job.view.dispW * PT_PER_PX, h = (job.seg.y1 - job.seg.y0) * job.view.scale * PT_PER_PX;
+			const x = margin + ((A4_W_MM - 2 * m) * PT_PER_MM - w) / 2, y = PAGE_H - margin - h;
+			let s = `q ${fixed(w)} 0 0 ${fixed(h)} ${fixed(x)} ${fixed(y)} cm /Im0 Do Q`;
+			if (pageNumbersBox.checked) {
+				const text = `${job.numbering.n} / ${job.numbering.total}`, tw = textWidth(text), pad = 2 * PT_PER_MM;
+				const base = PAGE_H - (A4_H_MM - Math.max(9, m / 2 + 2.5)) * PT_PER_MM - PNUM_BASELINE;
+				s += `\n1 g ${fixed(PAGE_W / 2 - tw / 2 - pad)} ${fixed(base - PNUM_DESCENT)} ${fixed(tw + 2 * pad)} ${fixed(PNUM_ASCENT + PNUM_DESCENT)} re f`;
+				s += `\n0 g BT /F1 ${PNUM_PT} Tf ${fixed(PAGE_W / 2 - tw / 2)} ${fixed(base)} Td (${text}) Tj ET`;
+			}
+			return s;
+		}
+
+		// 목록 순서대로 모든 장을 담은 PDF Blob. 장 목록을 먼저 정하고, 그림은 한 장씩 그려 압축한 뒤 바로 버린다.
+		// 객체 번호: 1 카탈로그, 2 쪽 목록, 3 글꼴, 4 문서 정보, 그 뒤 장마다 그림·내용·장 세 개
+		async function buildPdf(m, title, progress) {
+			const jobs = [];
+			for (const d of docs) {
+				withDoc(d, () => {
+					const v = view = computeView(m);
+					v.segs.forEach((seg, i, segs) => jobs.push({ d, view: v, seg, numbering: pageNumberOf(i, segs.length) }));
+				});
+			}
+			const parts = [], offsets = [];
+			let size = 0;
+			const push = part => { parts.push(part); size += part instanceof Blob ? part.size : part.length; };
+			const obj = (id, body) => { offsets[id] = size; push(enc.encode(`${id} 0 obj\n${body}\nendobj\n`)); };
+			const FIRST = 5, total = FIRST + 3 * jobs.length;
+			push(new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0x25, 0xe2, 0xe3, 0xcf, 0xd3, 0x0a])); // %PDF-1.4, 이진 파일 표시
+			obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+			obj(2, `<< /Type /Pages /Count ${jobs.length} /Kids [${jobs.map((_, k) => `${FIRST + 3 * k + 2} 0 R`).join(' ')}] >>`);
+			obj(3, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+			obj(4, `<< /Title ${pdfText(title)} /Producer (PrintImg) >>`);
+			for (const [k, job] of jobs.entries()) {
+				progress(k + 1, jobs.length);
+				const canvas = withDoc(job.d, () => { view = job.view; return pageCanvas(job.seg.y0, job.seg.y1); });
+				const { width: w, height: h } = canvas;
+				let pixels;
+				try {
+					pixels = await encodePixels(canvas);
+				} finally {
+					canvas.width = canvas.height = 0; // 큰 캔버스 메모리를 바로 돌려준다
+				}
+				const id = FIRST + 3 * k;
+				offsets[id] = size;
+				push(enc.encode(`${id} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${w} /Height ${h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /BitsPerComponent 8 /Columns ${w} >> /Length ${pixels.size} >>\nstream\n`));
+				push(pixels);
+				push(enc.encode('\nendstream\nendobj\n'));
+				const content = pageContent(job, m);
+				obj(id + 1, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+				obj(id + 2, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${fixed(PAGE_W)} ${fixed(PAGE_H)}] /Resources << /XObject << /Im0 ${id} 0 R >> /Font << /F1 3 0 R >> >> /Contents ${id + 1} 0 R >>`);
+			}
+			const xref = size;
+			let table = `xref\n0 ${total}\n0000000000 65535 f \n`;
+			for (let id = 1; id < total; id++) table += `${String(offsets[id]).padStart(10, '0')} 00000 n \n`;
+			push(enc.encode(`${table}trailer\n<< /Size ${total} /Root 1 0 R /Info 4 0 R >>\nstartxref\n${xref}\n%%EOF\n`));
+			return new Blob(parts, { type: 'application/pdf' });
+		}
+
+		function download(blob, name) {
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = name;
+			document.body.append(a);
+			a.click();
+			a.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 60000);
+		}
+
+		const sizeText = bytes => bytes < 1048576 ? `${Math.max(1, Math.round(bytes / 1024))}KB` : `${(bytes / 1048576).toFixed(1)}MB`;
+
+		savePdfBtn.addEventListener('click', async () => {
+			if (busy || !docs.length) return;
+			errorEl.textContent = '';
+			if (!('CompressionStream' in window)) {
+				errorEl.textContent = '이 브라우저는 PDF 바로 저장을 지원하지 않습니다. 인쇄 창에서 PDF로 저장하세요.';
+				return;
+			}
+			settleEdit(); // 옮기던 선을 확정하고, 입력 중인 여백을 미리보기에도 반영한 뒤 만든다
+			if (renderedMargin !== marginMm()) {
+				clearTimeout(renderTimer);
+				render();
+			}
+			const m = marginMm(), name = baseName();
+			busy = savePdfBtn.disabled = true;
+			try {
+				const blob = await buildPdf(m, name, (k, n) => { pdfStatus.textContent = `PDF 만드는 중… ${k} / ${n}장`; });
+				download(blob, `${name}.pdf`);
+				pdfStatus.textContent = `내려받기를 시작했습니다: ${name}.pdf (${sizeText(blob.size)})`;
+			} catch (e) {
+				console.error(e);
+				pdfStatus.textContent = '';
+				errorEl.textContent = 'PDF를 만들지 못했습니다. 인쇄 창에서 PDF로 저장해 보세요.';
+			} finally {
+				busy = false;
+				savePdfBtn.disabled = !docs.length;
+			}
+		});
+
+		hooks.afterRender.push(() => {
+			savePdfBtn.disabled = busy || !docs.length;
+			pdfNameIn.placeholder = defaultName();
+			if (!docs.length) pdfStatus.textContent = '';
+		});
+	}
+	// ---------- PDF 저장 끝 ----------
+
 	// ---------- 설정 기억 ----------
 	// 여백과 옵션만 이 브라우저에 남긴다. 이미지·파일 이름·자르는 선·구간·가리기·되돌리기 기록은 저장하지 않고,
 	// 배경색 값(bgPick)도 이미지마다 감지하므로 남기지 않는다.
@@ -2196,8 +2371,8 @@ document.addEventListener('DOMContentLoaded', function () {
 				<dd>미리보기 위 버튼을 누르고 이미지에서 끕니다. 가린 곳은 인쇄물의 픽셀까지 검게 칠해집니다.</dd>
 				<dt>원본 크기 유지</dt>
 				<dd>96 DPI 기준 실제 크기로 찍고, 인쇄 영역보다 넓으면 폭에 맞춥니다.</dd>
-				<dt>인쇄</dt>
-				<dd><kbd>Ctrl</kbd>+<kbd>P</kbd>로도 됩니다. 머리글·바닥글은 켜져 있어도 찍히지 않습니다.</dd>
+				<dt>저장·인쇄</dt>
+				<dd><strong>PDF로 저장</strong>은 인쇄 창 없이 바로 파일을 만듭니다. 파일 이름 칸을 비워 두면 첫 이미지 이름을 씁니다. 인쇄는 <kbd>Ctrl</kbd>+<kbd>P</kbd>로도 되고, 머리글·바닥글은 켜져 있어도 찍히지 않습니다.</dd>
 				<dt>저장</dt>
 				<dd>여백과 옵션만 이 브라우저에 기억합니다. 이미지와 편집 내용은 저장하지 않습니다.</dd>
 			</dl>
@@ -2279,8 +2454,14 @@ document.addEventListener('DOMContentLoaded', function () {
 		</section>
 
 		<section aria-labelledby="h-print">
-			<h2 id="h-print">4. 인쇄</h2>
-			<button type="button" id="print" disabled>인쇄</button>
+			<h2 id="h-print">4. 저장·인쇄</h2>
+			<div class="field stack">
+				<label for="pdfName">파일 이름</label>
+				<input type="text" id="pdfName" autocomplete="off" spellcheck="false">
+			</div>
+			<button type="button" id="savePdf" disabled>PDF로 저장</button>
+			<p id="pdfStatus" class="hint" role="status" aria-live="polite"></p>
+			<button type="button" id="print" class="secondary" disabled>인쇄</button>
 			<p id="status" role="status" aria-live="polite"></p>
 			<p id="error" role="alert"></p>
 			<p class="hint">인쇄 창에서 여백은 <strong>기본값</strong>, 배율은 <strong>100%</strong>로 두세요.</p>
