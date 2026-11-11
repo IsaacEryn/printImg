@@ -88,13 +88,18 @@
 	#error { margin: 10px 0 0; color: var(--danger); font-weight: 600; }
 	#error:empty { display: none; }
 	kbd { font: inherit; font-size: 12px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 4px; background: #f4f4f6; }
+	/* 사용법·단축키: 평소에는 접어 두어 패널을 짧게 */
+	.help summary { cursor: pointer; padding: 2px 0; font-size: 14px; font-weight: 600; color: var(--accent); }
+	.help dl { margin: 8px 0 0; font-size: 13px; }
+	.help dt { margin-top: 10px; font-weight: 600; }
+	.help dd { margin: 2px 0 0; color: var(--muted); }
 
 	/* ---------- 미리보기 ---------- */
 	.preview { padding: 20px 16px; min-width: 0; }
 	/* 선을 옮길 때 캔버스가 펼쳐지면 브라우저의 스크롤 고정이 화면을 그만큼 밀어 버린다. 페이지 높이는 고정이라 필요 없다 */
 	#pages { overflow-anchor: none; }
 	#pages:empty::after {
-		content: "왼쪽에서 이미지를 선택하면 여기에 페이지 미리보기가 나타납니다.";
+		content: "이미지를 고르거나, 붙여 넣거나(Ctrl+V), 이 창에 끌어다 놓으세요.";
 		display: block; padding: 40px 20px; text-align: center; color: var(--muted);
 	}
 	/* 페이지 한 장 = 용지(여백 포함). 안쪽 .content가 인쇄 영역, 그 안에 조각 캔버스 하나 */
@@ -193,7 +198,7 @@
 	/* ---------- 인쇄 시 ---------- */
 	@media print {
 		body { background: #fff; }
-		.panel, .num, .cut, .veil, #loupe, .preview-tools { display: none !important; }
+		.panel, .num, .cut, .veil, #loupe, .preview-tools, #editHint { display: none !important; }
 		.app { display: block; min-height: 0; }
 		.preview { padding: 0; }
 		.page {
@@ -246,6 +251,9 @@
 	#markTools button:disabled { color: var(--muted); background: var(--panel); border-color: var(--line); }
 	#markHint { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 	#markHint:empty { display: none; }
+	/* 처음 편집할 때 볼 한 줄 안내. 스크롤하면 사라지도록 띠 밖에 둔다 */
+	#editHint { margin: 0 0 12px; }
+	.preview:has(#pages:empty) #editHint { display: none; }
 	/* 도구를 켜면 페이지 어디서든 끌 수 있게 선과 그 단추는 포인터를 받지 않는다 */
 	#pages.tool-on { position: relative; user-select: none; }
 	#pages.tool-on .page { cursor: crosshair; touch-action: none; }
@@ -915,7 +923,7 @@ document.addEventListener('DOMContentLoaded', function () {
 				<span class="cut-label"></span>
 				<button type="button" data-action="up" aria-label="${n}페이지 자를 위치를 위로" title="위로">▲</button>
 				<button type="button" data-action="down" aria-label="${n}페이지 자를 위치를 아래로" title="아래로">▼</button>
-				${seg.kind === 'added' ? `<button type="button" data-action="remove" aria-label="${n}페이지 뒤의 페이지 나누기 빼기. 내용이 한 장을 넘으면 자동 선이 다시 생깁니다" title="이 페이지 나누기 빼기 (내용이 한 장을 넘으면 자동 선이 다시 생깁니다)">빼기</button>` : seg.manual ? `<button type="button" data-action="auto" aria-label="${n}페이지 자를 위치를 자동으로 되돌리기" title="자동 위치로 되돌리기">자동</button>` : ''}
+				${seg.kind === 'added' ? `<button type="button" data-action="remove" aria-label="${n}페이지 뒤 페이지 나누기 빼기" title="페이지 나누기 빼기">빼기</button>` : seg.manual ? `<button type="button" data-action="auto" aria-label="${n}페이지 자를 위치를 자동으로 되돌리기" title="자동 위치로 되돌리기">자동</button>` : ''}
 			</div>`;
 		showCut(cut, cutKind(seg), seg.y1);
 		return cut;
@@ -1618,8 +1626,8 @@ document.addEventListener('DOMContentLoaded', function () {
 		const maskForm   = document.getElementById('maskForm');
 
 		const TOOL_HINTS = {
-			band: '위아래로 끌면 그 구간이 빠집니다. Shift를 누르면 자석 없이 고르고, Esc로 끝냅니다.',
-			mask: '사각형을 끌면 그곳이 검게 칠해집니다. Esc로 끝냅니다.',
+			band: '뺄 구간을 위아래로 끄세요 · Shift: 자석 없이 · Esc: 끝내기',
+			mask: '가릴 곳을 끄세요. 인쇄물에서도 검게 칠해집니다 · Esc: 끝내기',
 		};
 
 		let markSeq = 0; // 구간·가림 id 순번
@@ -1819,7 +1827,7 @@ document.addEventListener('DOMContentLoaded', function () {
 				() => mutateDoc('가림 지우기', d => { d.masks = d.masks.filter(x => x.id !== m.id); })
 			)), toolMask);
 			marksEmpty.hidden = bands.length + masks.length > 0;
-			marksSize.textContent = doc ? `지금 이미지는 가로 ${img.naturalWidth}, 세로 ${img.naturalHeight}픽셀입니다. 세로 끝 값은 그 줄 바로 앞까지 뺍니다.` : '이미지를 먼저 선택하세요.';
+			marksSize.textContent = doc ? `이미지 크기: ${img.naturalWidth} × ${img.naturalHeight}픽셀. 끝 값의 줄은 빼지 않습니다.` : '이미지를 먼저 선택하세요.';
 		}
 
 		// 숫자 칸을 읽어 배열로 돌려준다. 비었거나 숫자가 아니면 안내하고 null
@@ -2125,32 +2133,49 @@ document.addEventListener('DOMContentLoaded', function () {
 	<aside class="panel" aria-label="설정">
 		<h1>PrintImg <span class="hint" style="display:inline">이미지를 A4로 나눠 인쇄</span></h1>
 
+		<details class="help">
+			<summary>사용법·단축키</summary>
+			<p class="hint">맥에서는 <kbd>Ctrl</kbd> 대신 <kbd>⌘</kbd>를 누르세요.</p>
+			<dl>
+				<dt>이미지 넣기</dt>
+				<dd>파일 선택, <kbd>Ctrl</kbd>+<kbd>V</kbd>, 끌어다 놓기 모두 됩니다. 새 이미지는 목록 끝에 붙고, 목록 순서대로 한 PDF가 됩니다.</dd>
+				<dt>자르는 선 옮기기</dt>
+				<dd>끌면 경계에 자석처럼 붙고, <kbd>Shift</kbd>를 누르면 자석 없이 천천히 움직입니다. 선을 고른 뒤 <kbd>↑</kbd><kbd>↓</kbd>는 1픽셀, <kbd>Ctrl</kbd>+<kbd>↑</kbd><kbd>↓</kbd>는 다음 경계까지입니다.</dd>
+				<dt>새 장 시작</dt>
+				<dd>이미지를 두 번 누르거나 장마다 있는 <strong>＋ 나누기</strong>를 씁니다. 추가한 선은 <strong>빼기</strong>나 <kbd>Delete</kbd>로 없애고, 남은 내용이 한 장을 넘으면 자동 선이 다시 생깁니다.</dd>
+				<dt>되돌리기</dt>
+				<dd><kbd>Ctrl</kbd>+<kbd>Z</kbd>. 다시 하기는 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>(윈도에서는 <kbd>Ctrl</kbd>+<kbd>Y</kbd>도)입니다. 입력칸에서는 그 칸만 되돌립니다.</dd>
+				<dt>구간 빼기·가리기</dt>
+				<dd>미리보기 위 버튼을 누르고 이미지에서 끕니다. 가린 곳은 인쇄물의 픽셀까지 검게 칠해집니다.</dd>
+				<dt>원본 크기 유지</dt>
+				<dd>96 DPI 기준 실제 크기로 찍고, 인쇄 영역보다 넓으면 폭에 맞춥니다.</dd>
+				<dt>인쇄</dt>
+				<dd><kbd>Ctrl</kbd>+<kbd>P</kbd>로도 됩니다. 머리글·바닥글은 켜져 있어도 찍히지 않습니다.</dd>
+				<dt>저장</dt>
+				<dd>여백과 옵션만 이 브라우저에 기억합니다. 이미지와 편집 내용은 저장하지 않습니다.</dd>
+			</dl>
+		</details>
+
 		<section aria-labelledby="h-file">
 			<h2 id="h-file">1. 이미지 선택</h2>
-			<label for="file" class="hint" style="margin:0 0 6px">PNG, JPG, BMP, GIF, WEBP (여러 개를 한꺼번에 고를 수 있음)</label>
+			<label for="file" class="hint" style="margin:0 0 6px">이미지 파일 (여러 장 가능)</label>
 			<input type="file" id="file" multiple accept="image/png,image/jpeg,image/bmp,image/gif,image/webp">
 			<p id="fileInfo" aria-live="polite">선택된 파일 없음</p>
 			<!-- 여러 이미지: 목록 -->
 			<ol id="docList" aria-label="인쇄할 이미지 목록" hidden></ol>
 			<button type="button" id="clearDocs" class="secondary" hidden>모두 비우기</button>
-			<p class="hint">복사한 이미지를 <kbd>Ctrl</kbd>+<kbd>V</kbd>(맥은 <kbd>⌘</kbd>+<kbd>V</kbd>)로 붙여 넣거나, 파일을 창에 끌어다 놓아도 됩니다. 새 이미지는 목록 끝에 붙고, 목록 순서대로 한 PDF로 인쇄됩니다. 목록에서 이름을 누르면 그 이미지를 미리 보고 고칠 수 있습니다.</p>
 		</section>
 
 		<fieldset>
 			<legend>2. 옵션</legend>
 			<div class="field">
 				<input type="checkbox" id="keep">
-				<label for="keep">원본 크기 유지 (96 DPI 기준 실제 크기. 인쇄 영역보다 넓으면 폭 맞춤)</label>
+				<label for="keep">원본 크기 유지</label>
 			</div>
 			<div class="field">
 				<input type="checkbox" id="smart" checked>
 				<label for="smart">빈 줄에 맞춰 자르기</label>
 			</div>
-			<p class="hint">미리보기의 빨간 선을 위아래로 끌면 페이지마다 자를 위치를 바꿀 수 있습니다. 색이 뚜렷하게 바뀌는 곳이나 카드·문단이 시작되는 곳에 선이 자석처럼 붙고, <kbd>Shift</kbd>를 누른 채 끌면 자석 없이 천천히 움직입니다.</p>
-			<p class="hint">선을 선택한 뒤 <kbd>↑</kbd> <kbd>↓</kbd>로 1픽셀씩, <kbd>Ctrl</kbd>(맥은 <kbd>⌘</kbd>)+<kbd>↑</kbd> <kbd>↓</kbd>로 다음 경계까지 옮길 수 있습니다.</p>
-			<!-- 페이지 나누기: 안내 -->
-			<p class="hint">미리보기를 두 번 누르면 그 줄에서 새 장이 시작됩니다. 키보드나 터치로는 각 장의 <strong>＋ 나누기</strong> 버튼을 쓰세요. 추가한 선은 <strong>빼기</strong> 버튼이나 <kbd>Delete</kbd>로 없애고, 남은 내용이 한 장을 넘으면 자동 선이 다시 생깁니다.</p>
-			<p class="hint">잘못 고쳤으면 미리보기 위의 <strong>되돌리기</strong>나 <kbd>Ctrl</kbd>+<kbd>Z</kbd>(맥은 <kbd>⌘</kbd>+<kbd>Z</kbd>)로 한 단계씩 되돌립니다. 다시 하려면 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>나 <kbd>Ctrl</kbd>+<kbd>Y</kbd>(맥은 <kbd>⌘</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>)를 누르세요. 숫자 칸에 입력 중일 때는 그 칸의 입력만 되돌립니다.</p>
 			<button type="button" id="resetCuts" class="secondary" hidden>직접 지정한 선 모두 되돌리기</button>
 			<div class="field">
 				<input type="checkbox" id="bgOn">
@@ -2160,7 +2185,7 @@ document.addEventListener('DOMContentLoaded', function () {
 					<option value="fade">흐리게</option>
 				</select>
 				<label for="bgOn">변경</label>
-				<input type="color" id="bgPick" value="#ffffff" aria-label="배경색 값 (자동 감지, 직접 고칠 수 있음)" title="감지된 배경색. 틀리면 직접 고르세요" disabled>
+				<input type="color" id="bgPick" value="#ffffff" aria-label="배경색 값 (자동 감지)" title="감지된 배경색. 틀리면 직접 고르세요" disabled>
 			</div>
 			<div class="field stack">
 				<label for="margin">여백 (mm)</label>
@@ -2172,14 +2197,12 @@ document.addEventListener('DOMContentLoaded', function () {
 				<input type="checkbox" id="pageNumbers">
 				<label for="pageNumbers">쪽 번호 인쇄 (n / 전체)</label>
 			</div>
-			<p class="hint">여백과 옵션은 이 브라우저에 기억해 두었다가 다음에 열 때 그대로 씁니다. 이미지와 자르는 선, 구간, 가림은 저장하지 않습니다.</p>
 		</fieldset>
 
 		<!-- 구간 빼기·가리기: 목록 -->
 		<section id="marksSection" aria-labelledby="h-marks">
 			<h2 id="h-marks">3. 빼낸 구간·가린 곳</h2>
-			<p class="hint">미리보기 위의 <strong>구간 빼기</strong>나 <strong>가리기</strong>를 누르고 이미지에서 끌어 고릅니다. 가린 곳은 화면과 인쇄물의 픽셀 자체가 검게 칠해집니다.</p>
-			<p id="marksEmpty" class="hint">아직 빼낸 구간이나 가린 곳이 없습니다.</p>
+			<p id="marksEmpty" class="hint">아직 없습니다. 미리보기 위 <strong>구간 빼기</strong>·<strong>가리기</strong>로 추가하세요.</p>
 			<ul id="bandList" class="mark-list" aria-label="빼낸 구간"></ul>
 			<ul id="maskList" class="mark-list" aria-label="가린 곳"></ul>
 			<details class="mark-forms">
@@ -2211,10 +2234,9 @@ document.addEventListener('DOMContentLoaded', function () {
 		<section aria-labelledby="h-print">
 			<h2 id="h-print">4. 인쇄</h2>
 			<button type="button" id="print" disabled>인쇄</button>
-			<p class="hint"><kbd>Ctrl</kbd>+<kbd>P</kbd>(맥은 <kbd>⌘</kbd>+<kbd>P</kbd>)로도 인쇄할 수 있습니다.</p>
 			<p id="status" role="status" aria-live="polite"></p>
 			<p id="error" role="alert"></p>
-			<p class="hint">인쇄 대화상자에서 여백은 <strong>기본값</strong>, 배율은 <strong>100%</strong>로 두세요. 바꾸면 페이지가 어긋납니다. 머리글·바닥글은 켜져 있어도 출력되지 않습니다.</p>
+			<p class="hint">인쇄 창에서 여백은 <strong>기본값</strong>, 배율은 <strong>100%</strong>로 두세요.</p>
 		</section>
 
 		<footer class="hint credit">Made by <a href="https://www.codeslog.com" rel="author">Isaac</a> · <a href="https://www.codeslog.com">codeslog.com</a> · MIT License</footer>
@@ -2232,6 +2254,7 @@ document.addEventListener('DOMContentLoaded', function () {
 				<span id="markHint" class="hint" aria-live="polite"></span>
 			</div>
 		</div>
+		<p id="editHint" class="hint">빨간 선을 끌어 위치 조정 · 이미지를 두 번 눌러 새 장</p>
 		<div id="pages"></div>
 		<!-- 여러 이미지: 인쇄용 -->
 		<div id="printPages"></div>
